@@ -228,19 +228,15 @@ class WanderBehavior(Behavior):
             if stall_check_count % 3 == 0:
                 logger.debug(f"Stall check #{stall_check_count}: pose=({current_x:.1f}, {current_y:.1f}), movement={movement:.1f}mm, accel_var={accel_variance:.1f}")
 
-            # Stall detection: low accelerometer variance = not actually moving
-            # Even if odometry says we moved, low vibration means wheels spinning in place
-            # Normal movement variance: 7000-80000, stuck with spinning wheels: <5000
+            # Stall detection based on odometry
+            # Note: Accelerometer variance doesn't help - motor vibration is similar stuck or moving
+            # The improved cliff detection (requires 2+ sensors on ground) catches edge cases
             is_stalled = False
             if stall_check_count > 5:
-                # Method 1: Odometry says no movement
+                # Odometry says no movement despite driving
                 if movement < 5.0:
                     is_stalled = True
                     logger.info(f"Stall detected (no odometry movement)! movement={movement:.1f}mm")
-                # Method 2: Low accelerometer variance while driving = wheels spinning
-                elif accel_variance < 5000.0 and len(accel_history) >= ACCEL_HISTORY_SIZE:
-                    is_stalled = True
-                    logger.info(f"Stall detected (low vibration)! accel_var={accel_variance:.1f}")
 
             if is_stalled:
                 logger.info("Backing up and turning to escape stall")

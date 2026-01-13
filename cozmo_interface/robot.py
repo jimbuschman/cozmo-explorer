@@ -218,9 +218,12 @@ class CozmoRobot:
             # Low values = sensor sees nothing = cliff/edge
             cliff_data = getattr(pkt, 'cliff_data_raw', None)
             if cliff_data:
-                # Cliff detected if NO sensor sees the ground (all readings low)
+                # Count how many sensors see ground
+                sensors_on_ground = sum(1 for r in cliff_data if r > 100)
+                # Cliff detected if fewer than 2 sensors see ground
+                # This catches edge cases like [888, 0, 0, 0] where robot is at table edge
                 was_cliff = self._sensors.cliff_detected
-                self._sensors.cliff_detected = not any(r > 100 for r in cliff_data)
+                self._sensors.cliff_detected = sensors_on_ground < 2
 
                 # IMMEDIATE STOP on cliff detection - don't wait for behavior loop
                 if self._sensors.cliff_detected and not was_cliff:
