@@ -19,12 +19,26 @@ from memory.state_store import StateStore
 from perception.vision_observer import VisionObserver
 from brain.personality import CozmoPersonality, get_random_line
 
-# Configure logging
+# Configure logging - both screen and file
+log_format = '%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s'
+log_datefmt = '%H:%M:%S'
+
+# Set up root logger
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s',
-    datefmt='%H:%M:%S'
+    level=logging.DEBUG,  # Capture DEBUG for file
+    format=log_format,
+    datefmt=log_datefmt,
+    handlers=[
+        # Console handler (INFO and above)
+        logging.StreamHandler(),
+        # File handler (DEBUG and above)
+        logging.FileHandler(config.DATA_DIR / 'cozmo.log', mode='w', encoding='utf-8')
+    ]
 )
+
+# Set console to INFO only (less noisy)
+logging.getLogger().handlers[0].setLevel(logging.INFO)
+
 logger = logging.getLogger(__name__)
 
 
