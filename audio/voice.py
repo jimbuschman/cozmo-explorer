@@ -71,6 +71,7 @@ class CozmoVoice:
     def _generate_raw_audio(self, text: str) -> Optional[str]:
         """Generate raw TTS audio to a temp file"""
         if not self._engine:
+            logger.error("TTS engine not initialized")
             return None
 
         temp_path = self._temp_dir / "raw_speech.wav"
@@ -78,9 +79,15 @@ class CozmoVoice:
         try:
             self._engine.save_to_file(text, str(temp_path))
             self._engine.runAndWait()
+            logger.debug(f"Generated raw TTS: {temp_path}")
             return str(temp_path)
         except Exception as e:
             logger.error(f"TTS generation failed: {e}")
+            try:
+                from brain.personality import error_log
+                error_log.log_error("voice", f"TTS generation failed for: {text[:50]}", e)
+            except:
+                pass
             return None
 
     def _apply_robot_effects(self, input_path: str) -> Optional[str]:
@@ -111,26 +118,32 @@ class CozmoVoice:
             return None
 
     def _convert_for_cozmo(self, input_path: str) -> Optional[str]:
-        """Convert audio to Cozmo-compatible format (22kHz, 8-bit unsigned mono)"""
+        """Convert audio to Cozmo-compatible format (22kHz, 16-bit mono)"""
         output_path = self._temp_dir / "cozmo_speech.wav"
 
         try:
             # Load and resample to 22kHz
             y, sr = librosa.load(input_path, sr=22050, mono=True)
 
-            # Clip to valid range [-1.0, 1.0]
+            # Clip to valid range and add safety margin
             y_clipped = np.clip(y, -1.0, 1.0)
 
-            # Convert to 8-bit unsigned (0-255) for Cozmo
-            # Map from [-1.0, 1.0] to [0, 255]
-            y_uint8 = ((y_clipped + 1.0) * 127.5).astype(np.uint8)
+            # Convert to 16-bit with 0.5 safety margin (like test_audio_simple.py)
+            # This ensures values stay well within int16 range
+            y_int16 = (y_clipped * 32767 * 0.5).astype(np.int16)
 
-            # Save as 8-bit unsigned PCM WAV
-            sf.write(str(output_path), y_uint8, 22050, subtype='PCM_U8')
+            # Save as 16-bit PCM WAV
+            sf.write(str(output_path), y_int16, 22050, subtype='PCM_16')
 
+            logger.info(f"Converted audio: {output_path}")
             return str(output_path)
         except Exception as e:
             logger.error(f"Cozmo conversion failed: {e}")
+            try:
+                from brain.personality import error_log
+                error_log.log_error("voice", f"Cozmo conversion failed: {input_path}", e)
+            except:
+                pass
             return None
 
     def generate_speech(self, text: str) -> Optional[str]:
@@ -192,6 +205,11 @@ class CozmoVoice:
             return True
         except Exception as e:
             logger.error(f"Failed to play audio on Cozmo: {e}")
+            try:
+                from brain.personality import error_log
+                error_log.log_error("voice", f"Failed to play audio: {text[:30]}", e, {"path": audio_path})
+            except:
+                pass
             return False
 
     def cleanup(self):
