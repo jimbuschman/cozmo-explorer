@@ -74,8 +74,8 @@ class VisionObserver:
             self.image_dir.mkdir(parents=True, exist_ok=True)
 
         # Head angle for looking forward (radians)
-        # 0.0 = straight, positive = up, negative = down
-        self.capture_head_angle = 0.1  # Slightly up to see ahead
+        # Range: -0.44 (down) to 0.78 (up), 0.0 = straight ahead
+        self.capture_head_angle = 0.35  # Look up/forward to see environment
 
     async def start(self):
         """Start the vision observer background task"""

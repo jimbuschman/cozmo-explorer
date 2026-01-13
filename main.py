@@ -131,6 +131,10 @@ class CozmoExplorer:
         last_x, last_y = 0, 0
 
         try:
+            # Set head to look forward (not down)
+            await self.robot.set_head_angle(0.35)  # Look up/forward
+            logger.info("Head positioned for exploration")
+
             # Start state machine in background
             state_task = asyncio.create_task(self.state_machine.start())
 
