@@ -165,11 +165,22 @@ class CozmoVoice:
                     if i == num_chunks - 1:
                         chunk[-fade_len:] *= np.linspace(1, 0, fade_len)
 
-                # Clip to valid range
-                chunk_clipped = np.clip(chunk, -1.0, 1.0)
+                # Apply compression for more consistent volume (from user's test program)
+                threshold = 0.2
+                ratio = 2.0
+                makeup_gain = 1.3
 
-                # Convert to 16-bit with 0.5 safety margin
-                chunk_int16 = (chunk_clipped * 32767 * 0.5).astype(np.int16)
+                gain_reduction = np.zeros_like(chunk)
+                mask = np.abs(chunk) > threshold
+                gain_reduction[mask] = (np.abs(chunk[mask]) - threshold) * (1 - 1/ratio)
+
+                compressed = chunk.copy()
+                compressed[mask] = np.sign(chunk[mask]) * (np.abs(chunk[mask]) - gain_reduction[mask])
+                compressed = compressed * makeup_gain
+
+                # Clip and convert to 16-bit
+                chunk_clipped = np.clip(compressed, -0.98, 0.98)
+                chunk_int16 = (chunk_clipped * 32767).astype(np.int16)
 
                 # Save chunk with part number
                 chunk_path = self._temp_dir / f"cozmo_speech_part{i+1}.wav"
