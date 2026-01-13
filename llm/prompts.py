@@ -53,8 +53,8 @@ Seeing something new:
 Continuing exploration:
 {
     "action": "explore",
-    "target": "North",
-    "reasoning": "North is unexplored and battery is good",
+    "target": "left side of room",
+    "reasoning": "I haven't explored that direction yet and battery is good",
     "speak": "Let's see what's over here!"
 }
 

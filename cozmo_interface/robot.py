@@ -208,10 +208,12 @@ class CozmoRobot:
             self._sensors.pose_y = self._pose.y
             self._sensors.pose_angle = self._pose.angle
 
-            # Check for cliff from raw data if available
+            # Cliff detection from raw sensor data (more reliable than event)
+            # High values (>100) = sensor sees ground = safe
+            # Low values = sensor sees nothing = cliff/edge
             cliff_data = getattr(pkt, 'cliff_data_raw', None)
             if cliff_data:
-                # Cliff detected if any sensor reads low (close to edge)
+                # Cliff detected if NO sensor sees the ground (all readings low)
                 self._sensors.cliff_detected = not any(r > 100 for r in cliff_data)
 
             # Check pickup status

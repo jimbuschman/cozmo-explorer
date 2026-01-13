@@ -343,7 +343,9 @@ class MemoryContext:
 
     def _battery_level(self, voltage: float) -> str:
         """Convert voltage to human-readable level"""
-        if voltage >= 4.5:
+        if voltage <= 0.1:
+            return "unknown"  # Not yet received from robot
+        elif voltage >= 4.5:
             return "full"
         elif voltage >= 4.0:
             return "good"
