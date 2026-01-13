@@ -214,7 +214,14 @@ class CozmoRobot:
             cliff_data = getattr(pkt, 'cliff_data_raw', None)
             if cliff_data:
                 # Cliff detected if NO sensor sees the ground (all readings low)
+                was_cliff = self._sensors.cliff_detected
                 self._sensors.cliff_detected = not any(r > 100 for r in cliff_data)
+
+                # IMMEDIATE STOP on cliff detection - don't wait for behavior loop
+                if self._sensors.cliff_detected and not was_cliff:
+                    logger.warning(f"CLIFF DETECTED! Raw: {cliff_data} - Emergency stop!")
+                    if self._client:
+                        self._client.drive_wheels(0, 0)  # Immediate stop
 
             # Check pickup status
             self._sensors.is_picked_up = getattr(pkt, 'is_picked_up', False)
