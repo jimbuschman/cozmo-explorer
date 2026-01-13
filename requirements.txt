@@ -1,0 +1,21 @@
+# Cozmo Explorer Dependencies
+
+# Robot control
+pycozmo>=0.8.0
+
+# Vector database for experience memory
+chromadb>=0.4.0
+
+# LLM integration
+ollama>=0.1.0
+httpx>=0.25.0
+
+# Data processing
+numpy>=1.24.0
+Pillow>=10.0.0
+
+# Async support
+asyncio-mqtt>=0.16.0  # Optional: for future multi-robot
+
+# Utilities
+python-dotenv>=1.0.0

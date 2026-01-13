@@ -1,0 +1,445 @@
+"""
+State Machine
+
+The core "brain" that manages robot states and decides what to do.
+Coordinates between behaviors, memory, and LLM guidance.
+"""
+import asyncio
+import logging
+from enum import Enum, auto
+from typing import Optional, Callable, Any
+from dataclasses import dataclass, field
+from datetime import datetime
+
+from cozmo_interface.robot import CozmoRobot
+from brain.behaviors import (
+    Behavior, BehaviorFactory, BehaviorStatus, BehaviorResult
+)
+
+logger = logging.getLogger(__name__)
+
+
+class RobotState(Enum):
+    """High-level robot states"""
+    IDLE = auto()           # Waiting, not doing anything
+    EXPLORING = auto()      # Actively exploring environment
+    INVESTIGATING = auto()  # Looking closely at something interesting
+    GOING_TO = auto()       # Navigating to a specific location
+    STUCK = auto()          # Can't make progress
+    CHARGING = auto()       # On charger, battery low
+    WAITING_FOR_LLM = auto() # Waiting for LLM guidance
+    ERROR = auto()          # Something went wrong
+
+
+@dataclass
+class Goal:
+    """A goal set by the LLM or internally"""
+    description: str
+    goal_type: str  # "explore", "go_to", "investigate", "idle"
+    parameters: dict = field(default_factory=dict)
+    created_at: datetime = field(default_factory=datetime.now)
+    priority: int = 1  # 1 = highest
+
+
+@dataclass
+class StateContext:
+    """Context passed between states"""
+    current_goal: Optional[Goal] = None
+    last_behavior_result: Optional[BehaviorResult] = None
+    stuck_count: int = 0
+    exploration_time: float = 0.0
+    last_llm_query: Optional[datetime] = None
+    interesting_observations: list = field(default_factory=list)
+
+
+class StateMachine:
+    """
+    Manages robot state transitions and behavior execution.
+
+    The state machine runs in a loop:
+    1. Check sensors/status
+    2. Decide if state should change
+    3. Execute appropriate behavior for current state
+    4. Update memory/context
+    5. Occasionally query LLM for guidance
+    """
+
+    def __init__(
+        self,
+        robot: CozmoRobot,
+        llm_client=None,
+        memory=None
+    ):
+        self.robot = robot
+        self.llm_client = llm_client
+        self.memory = memory
+
+        self.behaviors = BehaviorFactory(robot)
+        self.state = RobotState.IDLE
+        self.context = StateContext()
+
+        self._running = False
+        self._current_behavior: Optional[Behavior] = None
+
+        # Callbacks for external monitoring
+        self._on_state_change: Optional[Callable] = None
+        self._on_goal_complete: Optional[Callable] = None
+
+        # Configuration
+        self.llm_query_interval = 30.0  # seconds
+        self.max_stuck_attempts = 3
+        self.low_battery_threshold = 3.5  # volts
+
+    @property
+    def is_running(self) -> bool:
+        return self._running
+
+    def set_state_change_callback(self, callback: Callable):
+        """Set callback for state changes: callback(old_state, new_state)"""
+        self._on_state_change = callback
+
+    def set_goal_complete_callback(self, callback: Callable):
+        """Set callback for goal completion: callback(goal, success)"""
+        self._on_goal_complete = callback
+
+    async def start(self):
+        """Start the state machine loop"""
+        if self._running:
+            logger.warning("State machine already running")
+            return
+
+        self._running = True
+        logger.info("Starting state machine")
+
+        try:
+            await self._run_loop()
+        except Exception as e:
+            logger.error(f"State machine error: {e}")
+            self.state = RobotState.ERROR
+        finally:
+            self._running = False
+
+    async def stop(self):
+        """Stop the state machine"""
+        logger.info("Stopping state machine")
+        self._running = False
+
+        if self._current_behavior:
+            self._current_behavior.cancel()
+
+        await self.robot.stop()
+
+    def set_goal(self, goal: Goal):
+        """Set a new goal for the robot"""
+        logger.info(f"New goal: {goal.description}")
+        self.context.current_goal = goal
+        self.context.stuck_count = 0
+
+    async def _run_loop(self):
+        """Main state machine loop"""
+        while self._running:
+            # Check for safety conditions first
+            if await self._check_safety():
+                continue
+
+            # Check if we need LLM guidance
+            if await self._should_query_llm():
+                await self._query_llm_for_guidance()
+
+            # Execute behavior based on current state
+            await self._execute_state()
+
+            # Small delay to prevent tight loop
+            await asyncio.sleep(0.1)
+
+    async def _check_safety(self) -> bool:
+        """
+        Check safety conditions that override normal operation.
+        Returns True if a safety condition was handled.
+        """
+        # Check if picked up
+        if self.robot.sensors.is_picked_up:
+            await self._change_state(RobotState.IDLE)
+            await self.robot.stop()
+            logger.info("Robot picked up - going idle")
+            await asyncio.sleep(1.0)
+            return True
+
+        # Check battery
+        if self.robot.sensors.battery_voltage < self.low_battery_threshold:
+            if self.robot.sensors.is_on_charger:
+                await self._change_state(RobotState.CHARGING)
+            else:
+                logger.warning("Low battery! Looking for charger...")
+                # In future: navigate to charger
+            return True
+
+        # Check if on charger and charging complete
+        if self.state == RobotState.CHARGING:
+            if self.robot.sensors.battery_voltage > 4.0:
+                logger.info("Charging complete!")
+                await self._change_state(RobotState.IDLE)
+            return True
+
+        return False
+
+    async def _should_query_llm(self) -> bool:
+        """Determine if we should ask the LLM for guidance"""
+        if self.llm_client is None:
+            return False
+
+        # Query if we have no goal
+        if self.context.current_goal is None:
+            return True
+
+        # Query if we're stuck
+        if self.state == RobotState.STUCK:
+            return True
+
+        # Query periodically
+        if self.context.last_llm_query is None:
+            return True
+
+        elapsed = (datetime.now() - self.context.last_llm_query).total_seconds()
+        return elapsed > self.llm_query_interval
+
+    async def _query_llm_for_guidance(self):
+        """Ask the LLM what to do next"""
+        if self.llm_client is None:
+            # No LLM, use default behavior
+            self.set_goal(Goal(
+                description="Explore the environment",
+                goal_type="explore"
+            ))
+            return
+
+        old_state = self.state
+        await self._change_state(RobotState.WAITING_FOR_LLM)
+
+        try:
+            # Build context for LLM
+            state_summary = self._build_state_summary()
+
+            # Query LLM
+            response = await self.llm_client.query_for_goal(state_summary)
+
+            if response:
+                goal = self._parse_llm_response(response)
+                if goal:
+                    self.set_goal(goal)
+
+            self.context.last_llm_query = datetime.now()
+
+        except Exception as e:
+            logger.error(f"LLM query failed: {e}")
+
+        # Return to previous state or idle
+        if self.context.current_goal:
+            await self._change_state(self._goal_to_state(self.context.current_goal))
+        else:
+            await self._change_state(old_state if old_state != RobotState.WAITING_FOR_LLM else RobotState.IDLE)
+
+    def _build_state_summary(self) -> dict:
+        """Build a summary of current state for the LLM"""
+        return {
+            "state": self.state.name,
+            "position": {
+                "x": self.robot.pose.x,
+                "y": self.robot.pose.y,
+                "angle_degrees": self.robot.pose.angle * 57.3
+            },
+            "sensors": {
+                "battery": self.robot.sensors.battery_voltage,
+                "on_charger": self.robot.sensors.is_on_charger,
+                "cliff_detected": self.robot.sensors.cliff_detected
+            },
+            "context": {
+                "exploration_time": self.context.exploration_time,
+                "stuck_count": self.context.stuck_count,
+                "current_goal": self.context.current_goal.description if self.context.current_goal else None,
+                "interesting_observations": self.context.interesting_observations[-5:]
+            }
+        }
+
+    def _parse_llm_response(self, response: str) -> Optional[Goal]:
+        """Parse LLM response into a Goal"""
+        # Simple parsing - in practice, use structured output
+        response_lower = response.lower()
+
+        if "explore" in response_lower:
+            return Goal(
+                description=response,
+                goal_type="explore"
+            )
+        elif "investigate" in response_lower or "look" in response_lower:
+            return Goal(
+                description=response,
+                goal_type="investigate"
+            )
+        elif "go to" in response_lower or "navigate" in response_lower:
+            return Goal(
+                description=response,
+                goal_type="go_to"
+            )
+        elif "wait" in response_lower or "idle" in response_lower:
+            return Goal(
+                description=response,
+                goal_type="idle"
+            )
+
+        # Default to explore
+        return Goal(
+            description=response,
+            goal_type="explore"
+        )
+
+    def _goal_to_state(self, goal: Goal) -> RobotState:
+        """Convert a goal type to a robot state"""
+        mapping = {
+            "explore": RobotState.EXPLORING,
+            "investigate": RobotState.INVESTIGATING,
+            "go_to": RobotState.GOING_TO,
+            "idle": RobotState.IDLE
+        }
+        return mapping.get(goal.goal_type, RobotState.IDLE)
+
+    async def _change_state(self, new_state: RobotState):
+        """Change to a new state"""
+        if new_state == self.state:
+            return
+
+        old_state = self.state
+        self.state = new_state
+        logger.info(f"State: {old_state.name} -> {new_state.name}")
+
+        if self._on_state_change:
+            self._on_state_change(old_state, new_state)
+
+    async def _execute_state(self):
+        """Execute behavior for current state"""
+        if self.state == RobotState.IDLE:
+            await self._do_idle()
+
+        elif self.state == RobotState.EXPLORING:
+            await self._do_explore()
+
+        elif self.state == RobotState.INVESTIGATING:
+            await self._do_investigate()
+
+        elif self.state == RobotState.GOING_TO:
+            await self._do_go_to()
+
+        elif self.state == RobotState.STUCK:
+            await self._do_stuck()
+
+        elif self.state == RobotState.CHARGING:
+            await self._do_charging()
+
+        elif self.state == RobotState.WAITING_FOR_LLM:
+            await asyncio.sleep(0.5)
+
+        elif self.state == RobotState.ERROR:
+            await self.robot.stop()
+            await asyncio.sleep(1.0)
+
+    async def _do_idle(self):
+        """Idle state - wait and occasionally look around"""
+        await asyncio.sleep(1.0)
+
+        # If no goal, set default explore goal
+        if self.context.current_goal is None:
+            self.set_goal(Goal(
+                description="Explore the environment",
+                goal_type="explore"
+            ))
+            await self._change_state(RobotState.EXPLORING)
+
+    async def _do_explore(self):
+        """Exploration state - wander and discover"""
+        # Run wander behavior for a bit
+        behavior = self.behaviors.wander(duration=10.0)
+        self._current_behavior = behavior
+
+        result = await behavior.run()
+        self._current_behavior = None
+        self.context.last_behavior_result = result
+
+        if result.status == BehaviorStatus.INTERRUPTED:
+            if "Cliff" in result.message:
+                self.context.stuck_count += 1
+                if self.context.stuck_count >= self.max_stuck_attempts:
+                    await self._change_state(RobotState.STUCK)
+            elif "picked up" in result.message.lower():
+                await self._change_state(RobotState.IDLE)
+        else:
+            self.context.stuck_count = 0
+            self.context.exploration_time += result.data.get('duration', 0) if result.data else 0
+
+    async def _do_investigate(self):
+        """Investigation state - look closely at something"""
+        behavior = self.behaviors.look_around(capture_images=True)
+        self._current_behavior = behavior
+
+        result = await behavior.run()
+        self._current_behavior = None
+        self.context.last_behavior_result = result
+
+        # Store captured images in memory if available
+        if result.data and 'images' in result.data and self.memory:
+            for img_data in result.data['images']:
+                # Would store in memory here
+                pass
+
+        # Goal complete, go back to exploring
+        if self.context.current_goal and self.context.current_goal.goal_type == "investigate":
+            if self._on_goal_complete:
+                self._on_goal_complete(self.context.current_goal, True)
+            self.context.current_goal = None
+
+        await self._change_state(RobotState.IDLE)
+
+    async def _do_go_to(self):
+        """Navigation state - go to a specific point"""
+        goal = self.context.current_goal
+
+        if not goal or 'target' not in goal.parameters:
+            logger.warning("Go-to state with no target")
+            await self._change_state(RobotState.IDLE)
+            return
+
+        from cozmo_interface.robot import RobotPose
+        target = RobotPose(**goal.parameters['target'])
+
+        behavior = self.behaviors.go_to(target)
+        self._current_behavior = behavior
+
+        result = await behavior.run()
+        self._current_behavior = None
+        self.context.last_behavior_result = result
+
+        if result.status == BehaviorStatus.COMPLETED:
+            if self._on_goal_complete:
+                self._on_goal_complete(goal, True)
+            self.context.current_goal = None
+            await self._change_state(RobotState.IDLE)
+        elif result.status == BehaviorStatus.FAILED:
+            self.context.stuck_count += 1
+            if self.context.stuck_count >= self.max_stuck_attempts:
+                await self._change_state(RobotState.STUCK)
+
+    async def _do_stuck(self):
+        """Stuck state - try to recover"""
+        logger.warning("Robot is stuck, attempting recovery")
+
+        # Try backing up and turning
+        behavior = self.behaviors.avoid_obstacle()
+        result = await behavior.run()
+
+        # Reset stuck count and try again
+        self.context.stuck_count = 0
+        await self._change_state(RobotState.EXPLORING)
+
+    async def _do_charging(self):
+        """Charging state - wait for battery"""
+        await asyncio.sleep(5.0)
+        logger.info(f"Charging... Battery: {self.robot.sensors.battery_voltage}V")
