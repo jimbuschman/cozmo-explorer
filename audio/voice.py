@@ -173,10 +173,13 @@ class CozmoVoice:
             return False
 
         # Generate the audio file
+        logger.info(f"Generating speech: '{text[:50]}...'")
         audio_path = self.generate_speech(text)
         if not audio_path:
             logger.warning(f"Failed to generate speech for: {text[:50]}...")
             return False
+
+        logger.info(f"Audio generated: {audio_path}")
 
         # Play through Cozmo
         try:

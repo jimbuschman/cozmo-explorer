@@ -327,17 +327,38 @@ class CozmoRobot:
 
     # ==================== Audio ====================
 
-    async def play_audio(self, wav_path: str):
+    async def set_volume(self, level: int = 50000):
+        """
+        Set Cozmo's speaker volume.
+
+        Args:
+            level: Volume level (0-65535, default 50000 ~= 75%)
+        """
+        if pycozmo and self._client:
+            self._client.set_volume(level)
+            logger.debug(f"Volume set to {level}")
+
+    async def play_audio(self, wav_path: str, wait: bool = True):
         """
         Play a WAV file through Cozmo's speaker.
 
         Args:
-            wav_path: Path to WAV file (22kHz, 16-bit mono recommended)
+            wav_path: Path to WAV file (must be 22kHz, 16-bit mono)
+            wait: Wait for audio to complete before returning
         """
         if pycozmo and self._client:
             try:
-                self._client.play_audio(wav_path)
-                logger.debug(f"Playing audio: {wav_path}")
+                # Ensure volume is set
+                self._client.set_volume(50000)
+
+                # Play the audio
+                self._client.play_audio(str(wav_path))
+                logger.info(f"Playing audio: {wav_path}")
+
+                # Wait for completion if requested
+                if wait:
+                    self._client.wait_for(pycozmo.event.EvtAudioCompleted)
+
             except Exception as e:
                 logger.error(f"Failed to play audio: {e}")
         else:
