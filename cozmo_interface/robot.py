@@ -199,9 +199,14 @@ class CozmoRobot:
             self._sensors.lift_height = getattr(pkt, 'lift_height_mm', self._sensors.lift_height)
 
             # Update pose directly from packet attributes
+            old_x, old_y = self._pose.x, self._pose.y
             self._pose.x = getattr(pkt, 'pose_x', self._pose.x)
             self._pose.y = getattr(pkt, 'pose_y', self._pose.y)
             self._pose.angle = getattr(pkt, 'pose_angle_rad', self._pose.angle)
+
+            # Debug: log significant pose changes
+            if abs(self._pose.x - old_x) > 1.0 or abs(self._pose.y - old_y) > 1.0:
+                logger.debug(f"Pose updated: ({old_x:.1f}, {old_y:.1f}) -> ({self._pose.x:.1f}, {self._pose.y:.1f})")
 
             # Sync to sensors
             self._sensors.pose_x = self._pose.x

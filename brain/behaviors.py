@@ -202,10 +202,14 @@ class WanderBehavior(Behavior):
             current_y = self.robot.pose.y
             movement = math.sqrt((current_x - last_pose_x)**2 + (current_y - last_pose_y)**2)
 
+            # Debug: log pose tracking every few checks
+            if stall_check_count % 3 == 0:
+                logger.debug(f"Stall check #{stall_check_count}: pose=({current_x:.1f}, {current_y:.1f}), movement={movement:.1f}mm")
+
             # If we've been driving but haven't moved much, we're probably stuck
             # Need 5+ checks (~1.5s) with less than 5mm movement to trigger
             if stall_check_count > 5 and movement < 5.0:  # Less than 5mm movement over ~1.5s
-                logger.info("Stall detected! Backing up and turning")
+                logger.info(f"Stall detected! movement={movement:.1f}mm over {stall_check_count} checks. Backing up and turning")
                 await self.robot.stop()
                 await self.robot.drive(-self.speed, duration=0.7)
                 await asyncio.sleep(0.7)

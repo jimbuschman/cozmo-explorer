@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git add:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\nImplement audio chunking for long TTS playback\n\nInstead of truncating audio to 2 seconds, now splits long audio into\nmultiple 2-second chunks and plays them sequentially. This preserves\nfull speech for longer text.\n\n- generate_speech\\(\\) returns list of chunk paths\n- speak\\(\\) plays all chunks with wait=True between each\n- Added fade in/out on chunks to prevent clicks\n- Updated PLAN.md with audio system documentation\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(git push:*)",
+      "Bash(git commit:*)"
+    ]
+  }
+}
