@@ -166,6 +166,9 @@ class CozmoExplorer:
             while self._running:
                 await asyncio.sleep(0.5)
 
+                # Refresh pose from pycozmo
+                self.robot._update_pose_from_client()
+
                 # Update spatial map with current position
                 x, y = self.robot.pose.x, self.robot.pose.y
                 if abs(x - last_x) > 10 or abs(y - last_y) > 10:

@@ -111,20 +111,22 @@ class CozmoVoice:
             return None
 
     def _convert_for_cozmo(self, input_path: str) -> Optional[str]:
-        """Convert audio to Cozmo-compatible format (22kHz, 16-bit mono)"""
+        """Convert audio to Cozmo-compatible format (22kHz, 8-bit unsigned mono)"""
         output_path = self._temp_dir / "cozmo_speech.wav"
 
         try:
             # Load and resample to 22kHz
             y, sr = librosa.load(input_path, sr=22050, mono=True)
 
-            # Clip to valid range and convert to 16-bit integer
-            # librosa can return values slightly outside [-1.0, 1.0] after processing
+            # Clip to valid range [-1.0, 1.0]
             y_clipped = np.clip(y, -1.0, 1.0)
-            y_int = (y_clipped * 32767).astype(np.int16)
 
-            # Save as WAV
-            sf.write(str(output_path), y_int, 22050, subtype='PCM_16')
+            # Convert to 8-bit unsigned (0-255) for Cozmo
+            # Map from [-1.0, 1.0] to [0, 255]
+            y_uint8 = ((y_clipped + 1.0) * 127.5).astype(np.uint8)
+
+            # Save as 8-bit unsigned PCM WAV
+            sf.write(str(output_path), y_uint8, 22050, subtype='PCM_U8')
 
             return str(output_path)
         except Exception as e:

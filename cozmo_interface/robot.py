@@ -189,17 +189,38 @@ class CozmoRobot:
             self._sensors.head_angle = getattr(state, 'head_angle', 0.0)
             self._sensors.lift_height = getattr(state, 'lift_height', 0.0)
 
-            # Update pose
+            # Update pose - check multiple possible attribute names
             pose = getattr(state, 'pose', None)
             if pose:
                 self._pose.x = getattr(pose, 'x', 0.0)
                 self._pose.y = getattr(pose, 'y', 0.0)
                 self._pose.angle = getattr(pose, 'angle', 0.0)
-                self._sensors.pose_x = self._pose.x
-                self._sensors.pose_y = self._pose.y
-                self._sensors.pose_angle = self._pose.angle
+            else:
+                # Try getting pose directly from state
+                self._pose.x = getattr(state, 'pose_x', self._pose.x)
+                self._pose.y = getattr(state, 'pose_y', self._pose.y)
+                self._pose.angle = getattr(state, 'pose_angle', self._pose.angle)
+
+            self._sensors.pose_x = self._pose.x
+            self._sensors.pose_y = self._pose.y
+            self._sensors.pose_angle = self._pose.angle
+
         except Exception as e:
             logger.debug(f"State update parse error: {e}")
+
+    def _update_pose_from_client(self):
+        """Try to get pose directly from pycozmo client"""
+        if self._client:
+            try:
+                # pycozmo might track pose on the client object
+                if hasattr(self._client, 'pose'):
+                    pose = self._client.pose
+                    if pose:
+                        self._pose.x = getattr(pose, 'x', self._pose.x)
+                        self._pose.y = getattr(pose, 'y', self._pose.y)
+                        self._pose.angle = getattr(pose, 'angle', self._pose.angle)
+            except Exception as e:
+                logger.debug(f"Pose update from client failed: {e}")
 
     async def disconnect(self):
         """Disconnect from Cozmo"""
@@ -361,6 +382,12 @@ class CozmoRobot:
 
             except Exception as e:
                 logger.error(f"Failed to play audio: {e}")
+                # Log to error file for debugging
+                try:
+                    from brain.personality import error_log
+                    error_log.log_error("audio", f"Failed to play audio: {wav_path}", e)
+                except:
+                    pass  # Don't crash if error logging fails
         else:
             logger.debug(f"SIM: play_audio={wav_path}")
 

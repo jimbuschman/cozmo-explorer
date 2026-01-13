@@ -74,25 +74,29 @@ cozmo-explorer/
 ├── brain/
 │   ├── state_machine.py       # Core loop: sense → think → act
 │   ├── behaviors.py           # Wander, wall-follow, go-to, look-around
-│   └── goal_executor.py       # Break LLM goals into behavior sequences
+│   ├── memory_context.py      # Rich context builder for LLM decisions
+│   └── personality.py         # Journal system, identity prompt
 │
 ├── memory/
 │   ├── spatial_map.py         # Where have I been? What's where?
 │   ├── experience_db.py       # ChromaDB - visual/semantic memories
-│   └── state_store.py         # SQLite - persistent state
+│   ├── state_store.py         # SQLite - persistent state
+│   └── conversation_memory.py # Token-budgeted memory pools for LLM context
 │
 ├── perception/
 │   ├── camera.py              # Frame capture, basic processing
-│   ├── sensors.py             # Cliff, accel, gyro aggregation
-│   └── vision.py              # Optional: object detection, SLAM
+│   ├── vision_observer.py     # Periodic vision analysis with LLaVA
+│   └── sensors.py             # Cliff, accel, gyro aggregation
 │
 ├── llm/
-│   ├── client.py              # Talk to Ollama
-│   └── prompts.py             # How to describe state to LLM
+│   ├── client.py              # Talk to Ollama, structured JSON decisions
+│   └── prompts.py             # Centralized prompt templates
+│
+├── audio/
+│   └── voice.py               # TTS + audio processing for speech
 │
 └── cozmo_interface/
-    ├── robot.py               # Wrapper around pycozmo
-    └── display.py             # Show status on Cozmo's face
+    └── robot.py               # Wrapper around pycozmo
 ```
 
 ## Cozmo Capabilities (via pycozmo)
@@ -154,11 +158,22 @@ The original "Autonomy & Self-Directed Growth Framework" maps to robot behaviors
 - [x] Goal parsing from LLM responses
 - [x] Periodic "what should I do?" queries
 
+### Phase 4.5: Memory-Augmented Decisions ✓
+- [x] Conversation memory with token-budgeted pools (ported from EchoFrontendV2)
+- [x] Memory context builder (gathers from all systems for LLM)
+- [x] Structured JSON decision parsing with fallback
+- [x] Auto-summarization when memory pools overflow
+- [x] Exploration journal system (JSON file)
+- [x] Vision observations feed into conversation memory
+- [x] Decision history tracking with outcomes
+
 ### Phase 5: Polish & Expansion (Future)
 - [ ] Better mapping (visual odometry?)
 - [ ] Object detection/recognition
 - [ ] More sophisticated exploration strategies
 - [ ] Multiple robot support (future)
+- [ ] Visual place recognition ("I've been here before")
+- [ ] Personality/character customization
 
 ## Connection Steps (pycozmo)
 
@@ -185,6 +200,38 @@ If migrating to a Pi-based custom robot later:
 - Replace pycozmo interface with custom sensor/motor bridge
 - Add ESP32 microcontrollers for real-time control
 - Pi handles high-level logic, microcontrollers handle reflexes
+
+## Memory Architecture
+
+The LLM receives context from multiple memory pools, each with a token budget:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                   32,000 Token Budget                        │
+├──────────┬──────────┬──────────┬──────────┬────────────────┤
+│  Core    │ Active   │ Recent   │ Recall   │    Buffer      │
+│  10%     │ Session  │ History  │  30%     │     10%        │
+│ (2048cap)│   35%    │   15%    │ (8192cap)│                │
+├──────────┼──────────┼──────────┼──────────┼────────────────┤
+│ Identity │ Current  │ Summar-  │ ChromaDB │ Spatial        │
+│ prompt   │ decisions│ ized old │ semantic │ context        │
+│          │ & obs    │ sessions │ memories │                │
+└──────────┴──────────┴──────────┴──────────┴────────────────┘
+```
+
+**Flow:**
+1. Vision observer captures image → LLaVA describes it → saves to ChromaDB + ActiveSession
+2. State machine asks LLM for decision
+3. MemoryContext gathers from all pools + spatial map + decision history
+4. LLM returns structured JSON: `{action, target, reasoning, speak}`
+5. Decision recorded in memory, outcome tracked
+6. When ActiveSession overflows → oldest items summarized → moved to RecentHistory
+
+**Data Files:**
+- `data/exploration_journal.json` - Human-readable log of observations/decisions
+- `data/chroma/` - ChromaDB semantic experience storage
+- `data/state.db` - SQLite state persistence
+- `data/spatial_map.npz` - Occupancy grid (where robot has been)
 
 ## Resources
 

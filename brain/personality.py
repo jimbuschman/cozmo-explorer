@@ -6,6 +6,7 @@ Think: a tiny alien scientist sent to study Earth from ground level.
 """
 import logging
 import json
+import traceback
 from typing import Optional, List
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -14,6 +15,85 @@ from pathlib import Path
 import config
 
 logger = logging.getLogger(__name__)
+
+
+class ErrorLog:
+    """
+    Separate error logging to a JSON file for debugging.
+    Captures errors, warnings, and issues during exploration.
+    """
+
+    def __init__(self, log_path: Optional[Path] = None):
+        self.log_path = log_path or (config.DATA_DIR / "error_log.json")
+        self.errors: List[dict] = []
+        self._load()
+
+    def _load(self):
+        """Load existing error log"""
+        if self.log_path.exists():
+            try:
+                with open(self.log_path, 'r') as f:
+                    self.errors = json.load(f)
+            except Exception:
+                self.errors = []
+
+    def _save(self):
+        """Save error log"""
+        try:
+            self.log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.log_path, 'w') as f:
+                json.dump(self.errors[-500:], f, indent=2)  # Keep last 500 errors
+        except Exception as e:
+            logger.error(f"Failed to save error log: {e}")
+
+    def log_error(
+        self,
+        source: str,
+        message: str,
+        exception: Optional[Exception] = None,
+        context: Optional[dict] = None
+    ):
+        """Log an error"""
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "level": "ERROR",
+            "source": source,
+            "message": message,
+            "exception": str(exception) if exception else None,
+            "traceback": traceback.format_exc() if exception else None,
+            "context": context
+        }
+        self.errors.append(entry)
+        self._save()
+        logger.error(f"[{source}] {message}")
+
+    def log_warning(self, source: str, message: str, context: Optional[dict] = None):
+        """Log a warning"""
+        entry = {
+            "timestamp": datetime.now().isoformat(),
+            "level": "WARNING",
+            "source": source,
+            "message": message,
+            "exception": None,
+            "traceback": None,
+            "context": context
+        }
+        self.errors.append(entry)
+        self._save()
+        logger.warning(f"[{source}] {message}")
+
+    def get_recent(self, count: int = 10) -> List[dict]:
+        """Get most recent errors"""
+        return self.errors[-count:]
+
+    def get_by_source(self, source: str, count: int = 10) -> List[dict]:
+        """Get errors from a specific source"""
+        filtered = [e for e in self.errors if e["source"] == source]
+        return filtered[-count:]
+
+
+# Global error log instance
+error_log = ErrorLog()
 
 
 @dataclass
