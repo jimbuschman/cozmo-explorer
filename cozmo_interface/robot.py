@@ -162,36 +162,44 @@ class CozmoRobot:
         except Exception as e:
             logger.warning(f"Could not set up some event handlers: {e}")
 
-    def _on_camera_image(self, cli, image):
+    def _on_camera_image(self, cli, *args):
         """Handle new camera frame"""
-        self._last_image = image
-        if self._image_callback:
-            self._image_callback(image)
+        if args:
+            self._last_image = args[0]
+            if self._image_callback:
+                self._image_callback(args[0])
 
-    def _on_cliff_detected(self, cli, state):
+    def _on_cliff_detected(self, cli, *args):
         """Handle cliff detection change"""
-        self._sensors.cliff_detected = state
-        if state:
-            logger.warning("Cliff detected!")
+        if args:
+            self._sensors.cliff_detected = args[0]
+            if args[0]:
+                logger.warning("Cliff detected!")
 
-    def _on_state_updated(self, cli, state):
+    def _on_state_updated(self, cli, *args):
         """Handle robot state update"""
-        # Update sensor data
-        self._sensors.is_picked_up = getattr(state, 'is_picked_up', False)
-        self._sensors.is_on_charger = getattr(state, 'is_on_charger', False)
-        self._sensors.battery_voltage = getattr(state, 'battery_voltage', 0.0)
-        self._sensors.head_angle = getattr(state, 'head_angle', 0.0)
-        self._sensors.lift_height = getattr(state, 'lift_height', 0.0)
+        # pycozmo passes the state object - figure out what we got
+        state = args[0] if args else cli
 
-        # Update pose
-        pose = getattr(state, 'pose', None)
-        if pose:
-            self._pose.x = pose.x
-            self._pose.y = pose.y
-            self._pose.angle = pose.angle
-            self._sensors.pose_x = pose.x
-            self._sensors.pose_y = pose.y
-            self._sensors.pose_angle = pose.angle
+        try:
+            # Update sensor data
+            self._sensors.is_picked_up = getattr(state, 'is_picked_up', False)
+            self._sensors.is_on_charger = getattr(state, 'is_on_charger', False)
+            self._sensors.battery_voltage = getattr(state, 'battery_voltage', 0.0)
+            self._sensors.head_angle = getattr(state, 'head_angle', 0.0)
+            self._sensors.lift_height = getattr(state, 'lift_height', 0.0)
+
+            # Update pose
+            pose = getattr(state, 'pose', None)
+            if pose:
+                self._pose.x = getattr(pose, 'x', 0.0)
+                self._pose.y = getattr(pose, 'y', 0.0)
+                self._pose.angle = getattr(pose, 'angle', 0.0)
+                self._sensors.pose_x = self._pose.x
+                self._sensors.pose_y = self._pose.y
+                self._sensors.pose_angle = self._pose.angle
+        except Exception as e:
+            logger.debug(f"State update parse error: {e}")
 
     async def disconnect(self):
         """Disconnect from Cozmo"""
