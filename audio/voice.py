@@ -128,7 +128,8 @@ class CozmoVoice:
             List of paths to WAV file chunks, or empty list if failed
         """
         # Max duration per chunk in seconds - pycozmo buffer limitation
-        CHUNK_DURATION = 2.0
+        # Using 1.5s instead of 2s for extra safety margin
+        CHUNK_DURATION = 1.5
         sr = 22050
 
         try:
@@ -246,6 +247,10 @@ class CozmoVoice:
         success = True
         for i, audio_path in enumerate(audio_paths):
             try:
+                # Add delay between chunks to let pycozmo buffer clear
+                if i > 0:
+                    await asyncio.sleep(0.3)  # 300ms gap between chunks
+
                 logger.debug(f"Playing chunk {i+1}/{len(audio_paths)}: {audio_path}")
                 await self.robot.play_audio(audio_path, wait=True)
             except Exception as e:
