@@ -173,6 +173,10 @@ class WanderBehavior(Behavior):
         last_pose_x = self.robot.pose.x
         last_pose_y = self.robot.pose.y
 
+        # Accelerometer history for vibration-based stall detection
+        accel_history = []
+        ACCEL_HISTORY_SIZE = 10  # Track last 10 readings
+
         logger.info(f"Starting wander for {self.duration}s")
 
         while elapsed < self.duration and not self.is_cancelled:
@@ -202,14 +206,42 @@ class WanderBehavior(Behavior):
             current_y = self.robot.pose.y
             movement = math.sqrt((current_x - last_pose_x)**2 + (current_y - last_pose_y)**2)
 
-            # Debug: log pose tracking every few checks
-            if stall_check_count % 3 == 0:
-                logger.debug(f"Stall check #{stall_check_count}: pose=({current_x:.1f}, {current_y:.1f}), movement={movement:.1f}mm")
+            # Track accelerometer for vibration-based stall detection
+            # When robot moves normally, there's vibration. When stuck, less vibration.
+            accel_magnitude = math.sqrt(
+                self.robot.sensors.accel_x**2 +
+                self.robot.sensors.accel_y**2 +
+                self.robot.sensors.accel_z**2
+            )
+            accel_history.append(accel_magnitude)
+            if len(accel_history) > ACCEL_HISTORY_SIZE:
+                accel_history.pop(0)
 
-            # If we've been driving but haven't moved much, we're probably stuck
-            # Need 5+ checks (~1.5s) with less than 5mm movement to trigger
-            if stall_check_count > 5 and movement < 5.0:  # Less than 5mm movement over ~1.5s
-                logger.info(f"Stall detected! movement={movement:.1f}mm over {stall_check_count} checks. Backing up and turning")
+            # Calculate accelerometer variance (vibration indicator)
+            accel_variance = 0.0
+            if len(accel_history) >= 5:
+                accel_mean = sum(accel_history) / len(accel_history)
+                accel_variance = sum((x - accel_mean)**2 for x in accel_history) / len(accel_history)
+
+            # Debug: log pose and accel tracking every few checks
+            if stall_check_count % 3 == 0:
+                logger.debug(f"Stall check #{stall_check_count}: pose=({current_x:.1f}, {current_y:.1f}), movement={movement:.1f}mm, accel_var={accel_variance:.4f}")
+
+            # Stall detection: low accelerometer variance = not actually moving
+            # Even if odometry says we moved, low vibration means wheels spinning in place
+            is_stalled = False
+            if stall_check_count > 5:
+                # Method 1: Odometry says no movement
+                if movement < 5.0:
+                    is_stalled = True
+                    logger.info(f"Stall detected (no odometry movement)! movement={movement:.1f}mm")
+                # Method 2: Low accelerometer variance while driving = wheels spinning
+                elif accel_variance < 0.001 and len(accel_history) >= ACCEL_HISTORY_SIZE:
+                    is_stalled = True
+                    logger.info(f"Stall detected (low vibration)! accel_var={accel_variance:.6f}")
+
+            if is_stalled:
+                logger.info("Backing up and turning to escape stall")
                 await self.robot.stop()
                 await self.robot.drive(-self.speed, duration=0.7)
                 await asyncio.sleep(0.7)
@@ -220,6 +252,7 @@ class WanderBehavior(Behavior):
                 stall_check_count = 0
                 last_pose_x = self.robot.pose.x
                 last_pose_y = self.robot.pose.y
+                accel_history.clear()  # Reset accelerometer history
                 continue
 
             stall_check_count += 1
