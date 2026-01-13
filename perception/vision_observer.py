@@ -9,11 +9,13 @@ import logging
 from typing import Optional, List
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 import uuid
 
 from perception.camera import CameraCapture
 from llm.client import LLMClient
 from memory.experience_db import ExperienceDB, Experience
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -44,13 +46,15 @@ class VisionObserver:
         llm_client: LLMClient,
         experience_db: ExperienceDB = None,
         capture_interval: float = 15.0,  # seconds between captures
-        enabled: bool = True
+        enabled: bool = True,
+        save_images: bool = True
     ):
         self.robot = robot
         self.llm = llm_client
         self.experiences = experience_db
         self.capture_interval = capture_interval
         self.enabled = enabled
+        self.save_images = save_images
 
         self.camera = CameraCapture(robot)
         self._running = False
@@ -59,6 +63,15 @@ class VisionObserver:
         # Recent observations (in-memory)
         self.recent_observations: List[Observation] = []
         self.max_recent = 20
+
+        # Image save directory
+        self.image_dir = config.DATA_DIR / "images"
+        if save_images:
+            self.image_dir.mkdir(parents=True, exist_ok=True)
+
+        # Head angle for looking forward (radians)
+        # 0.0 = straight, positive = up, negative = down
+        self.capture_head_angle = 0.1  # Slightly up to see ahead
 
     async def start(self):
         """Start the vision observer background task"""
@@ -93,16 +106,31 @@ class VisionObserver:
 
     async def _capture_and_analyze(self):
         """Capture an image and analyze it with LLaVA"""
-        # Capture image
-        image_base64 = await self.camera.capture_for_llm(max_size=384)
+        # Adjust head to look forward before capturing
+        try:
+            await self.robot.set_head_angle(self.capture_head_angle)
+            await asyncio.sleep(0.3)  # Wait for head to move
+        except Exception as e:
+            logger.debug(f"Could not set head angle: {e}")
 
-        if not image_base64:
+        # Capture image (get both raw and base64)
+        raw_image = await self.camera.capture()
+        if not raw_image:
             logger.debug("No image captured")
             return
+
+        image_base64 = self.camera.image_to_base64(
+            self.camera.resize_for_llm(raw_image, max_size=384)
+        )
 
         # Get robot position
         pos_x = self.robot.pose.x
         pos_y = self.robot.pose.y
+        timestamp = datetime.now()
+
+        # Save image to disk
+        if self.save_images:
+            await self._save_image(raw_image, pos_x, pos_y, timestamp)
 
         # Ask LLaVA what it sees
         logger.info("Analyzing image with LLaVA...")
@@ -115,13 +143,17 @@ class VisionObserver:
             logger.warning("No description from LLaVA")
             return
 
+        # Save description alongside image
+        if self.save_images:
+            await self._save_description(description, pos_x, pos_y, timestamp)
+
         # Create observation
         observation = Observation(
             id=str(uuid.uuid4()),
             description=description,
             location_x=pos_x,
             location_y=pos_y,
-            timestamp=datetime.now()
+            timestamp=timestamp
         )
 
         # Store in recent list
@@ -145,6 +177,26 @@ class VisionObserver:
         logger.info(f"Observation at ({pos_x:.0f}, {pos_y:.0f}): {description[:80]}...")
 
         return observation
+
+    async def _save_image(self, image, x: float, y: float, timestamp: datetime):
+        """Save image to disk"""
+        try:
+            filename = f"{timestamp.strftime('%Y-%m-%d_%H-%M-%S')}_x{x:.0f}_y{y:.0f}.jpg"
+            filepath = self.image_dir / filename
+            image.save(filepath, "JPEG", quality=90)
+            logger.debug(f"Saved image: {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to save image: {e}")
+
+    async def _save_description(self, description: str, x: float, y: float, timestamp: datetime):
+        """Save description text file alongside image"""
+        try:
+            filename = f"{timestamp.strftime('%Y-%m-%d_%H-%M-%S')}_x{x:.0f}_y{y:.0f}.txt"
+            filepath = self.image_dir / filename
+            filepath.write_text(f"Position: ({x:.0f}, {y:.0f})\nTime: {timestamp}\n\n{description}")
+            logger.debug(f"Saved description: {filepath}")
+        except Exception as e:
+            logger.error(f"Failed to save description: {e}")
 
     async def capture_now(self) -> Optional[Observation]:
         """

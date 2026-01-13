@@ -105,7 +105,8 @@ class CozmoExplorer:
             llm_client=self.llm,
             experience_db=self.experiences,
             capture_interval=20.0,  # Capture every 20 seconds
-            enabled=True
+            enabled=True,
+            save_images=True  # Save images to data/images/
         )
 
         logger.info("Initialization complete!")
