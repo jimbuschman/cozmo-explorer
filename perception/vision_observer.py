@@ -15,6 +15,7 @@ import uuid
 from perception.camera import CameraCapture
 from llm.client import LLMClient
 from memory.experience_db import ExperienceDB, Experience
+from audio.voice import CozmoVoice
 import config
 
 logger = logging.getLogger(__name__)
@@ -47,7 +48,8 @@ class VisionObserver:
         experience_db: ExperienceDB = None,
         capture_interval: float = 15.0,  # seconds between captures
         enabled: bool = True,
-        save_images: bool = True
+        save_images: bool = True,
+        speak_descriptions: bool = True  # Have Cozmo speak what it sees
     ):
         self.robot = robot
         self.llm = llm_client
@@ -55,8 +57,10 @@ class VisionObserver:
         self.capture_interval = capture_interval
         self.enabled = enabled
         self.save_images = save_images
+        self.speak_descriptions = speak_descriptions
 
         self.camera = CameraCapture(robot)
+        self.voice = CozmoVoice(robot) if speak_descriptions else None
         self._running = False
         self._task: Optional[asyncio.Task] = None
 
@@ -159,6 +163,15 @@ class VisionObserver:
         # Save description alongside image
         if self.save_images:
             await self._save_description(description, pos_x, pos_y, timestamp)
+
+        # Have Cozmo speak the description
+        if self.voice and self.speak_descriptions:
+            try:
+                # Shorten very long descriptions for speech
+                speech_text = description[:150] if len(description) > 150 else description
+                await self.voice.speak(speech_text)
+            except Exception as e:
+                logger.debug(f"Could not speak description: {e}")
 
         # Create observation
         observation = Observation(

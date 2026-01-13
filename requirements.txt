@@ -14,6 +14,11 @@ httpx>=0.25.0
 numpy>=1.24.0
 Pillow>=10.0.0
 
+# Audio/Voice synthesis
+pyttsx3>=2.90
+librosa>=0.10.0
+soundfile>=0.12.0
+
 # Async support
 asyncio-mqtt>=0.16.0  # Optional: for future multi-robot
 

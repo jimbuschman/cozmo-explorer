@@ -325,6 +325,24 @@ class CozmoRobot:
         if pycozmo and self._client:
             self._client.enable_camera(enable=True, color=True)
 
+    # ==================== Audio ====================
+
+    async def play_audio(self, wav_path: str):
+        """
+        Play a WAV file through Cozmo's speaker.
+
+        Args:
+            wav_path: Path to WAV file (22kHz, 16-bit mono recommended)
+        """
+        if pycozmo and self._client:
+            try:
+                self._client.play_audio(wav_path)
+                logger.debug(f"Playing audio: {wav_path}")
+            except Exception as e:
+                logger.error(f"Failed to play audio: {e}")
+        else:
+            logger.debug(f"SIM: play_audio={wav_path}")
+
     # ==================== Lights ====================
 
     async def set_head_light(self, enable: bool):
