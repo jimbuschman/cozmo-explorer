@@ -16,6 +16,7 @@ from llm.client import LLMClient
 from memory.experience_db import ExperienceDB
 from memory.spatial_map import SpatialMap
 from memory.state_store import StateStore
+from perception.vision_observer import VisionObserver
 
 # Configure logging
 logging.basicConfig(
@@ -38,6 +39,7 @@ class CozmoExplorer:
         self.spatial_map = SpatialMap()
         self.state_store = StateStore()
         self.state_machine: StateMachine = None
+        self.vision_observer: VisionObserver = None
 
         self._running = False
         self._start_time: datetime = None
@@ -97,6 +99,15 @@ class CozmoExplorer:
         self.state_machine.set_state_change_callback(self._on_state_change)
         self.state_machine.set_goal_complete_callback(self._on_goal_complete)
 
+        # Initialize vision observer
+        self.vision_observer = VisionObserver(
+            robot=self.robot,
+            llm_client=self.llm,
+            experience_db=self.experiences,
+            capture_interval=20.0,  # Capture every 20 seconds
+            enabled=True
+        )
+
         logger.info("Initialization complete!")
         return True
 
@@ -122,6 +133,10 @@ class CozmoExplorer:
             # Start state machine in background
             state_task = asyncio.create_task(self.state_machine.start())
 
+            # Start vision observer
+            await self.vision_observer.start()
+            logger.info("Vision observer started - capturing images every 20s")
+
             # Main monitoring loop
             while self._running:
                 await asyncio.sleep(0.5)
@@ -144,6 +159,10 @@ class CozmoExplorer:
     async def _shutdown(self):
         """Clean shutdown"""
         logger.info("Shutting down...")
+
+        # Stop vision observer
+        if self.vision_observer:
+            await self.vision_observer.stop()
 
         # Stop state machine
         if self.state_machine:
@@ -207,6 +226,14 @@ class CozmoExplorer:
         logger.info(f"Battery: {robot.sensors.battery_voltage:.2f}V")
         logger.info(f"Exploration: {sm.context.exploration_time:.0f}s")
         logger.info(f"Map: {self.spatial_map.get_visited_percentage()*100:.1f}% visited")
+
+        # Show recent observations
+        if self.vision_observer and self.vision_observer.recent_observations:
+            recent = self.vision_observer.get_recent_descriptions(3)
+            if recent:
+                logger.info("Recent observations:")
+                for obs in recent:
+                    logger.info(f"  - {obs[:60]}...")
         logger.info("-" * 40)
 
     def stop(self):

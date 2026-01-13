@@ -30,14 +30,30 @@ class LLMClient:
         self,
         host: str = None,
         model: str = None,
+        vision_model: str = None,
         timeout: float = None
     ):
         self.host = host or config.OLLAMA_HOST
         self.model = model or config.OLLAMA_MODEL
+        self.vision_model = vision_model or "llava"  # Vision model for image analysis
         self.timeout = timeout or config.LLM_TIMEOUT
 
         self._client: Optional[httpx.AsyncClient] = None
         self._system_prompt = self._build_system_prompt()
+        self._vision_prompt = self._build_vision_prompt()
+
+    def _build_vision_prompt(self) -> str:
+        return """You are the eyes of an autonomous Cozmo robot exploring a house.
+
+Your job is to describe what you see in images from the robot's camera. Be concise but informative.
+
+Focus on:
+- Objects (furniture, items, obstacles)
+- The environment (room type, floor, walls)
+- Anything interesting or unusual
+- Potential obstacles or hazards
+
+Keep descriptions to 1-2 sentences. Be specific about what you see."""
 
     def _build_system_prompt(self) -> str:
         return """You are the decision-making brain of an autonomous Cozmo robot exploring a house.
@@ -110,21 +126,52 @@ Respond with a clear goal statement. Examples:
 
     async def describe_image(self, image_base64: str, context: str = "") -> Optional[str]:
         """
-        Ask the LLM to describe what's in an image.
+        Ask LLaVA to describe what's in an image.
 
-        Note: Requires a vision-capable model like llava.
+        Args:
+            image_base64: Base64 encoded image
+            context: Optional additional context
+
+        Returns:
+            Description of what's in the image
         """
         if self._client is None:
             await self.connect()
 
-        prompt = f"Describe what you see in this image. {context}"
+        prompt = "What do you see in this image? Be concise (1-2 sentences)."
+        if context:
+            prompt += f" Context: {context}"
 
         try:
-            response = await self._chat_with_image(prompt, image_base64)
+            response = await self._vision_query(prompt, image_base64)
+            logger.info(f"Vision response: {response[:100]}...")
             return response
         except Exception as e:
             logger.error(f"Image description failed: {e}")
             return None
+
+    async def _vision_query(self, prompt: str, image_base64: str) -> str:
+        """Send a vision query to LLaVA"""
+        url = f"{self.host}/api/chat"
+
+        payload = {
+            "model": self.vision_model,
+            "messages": [
+                {"role": "system", "content": self._vision_prompt},
+                {
+                    "role": "user",
+                    "content": prompt,
+                    "images": [image_base64]
+                }
+            ],
+            "stream": False
+        }
+
+        response = await self._client.post(url, json=payload, timeout=90.0)  # Vision takes longer
+        response.raise_for_status()
+
+        data = response.json()
+        return data.get("message", {}).get("content", "")
 
     async def interpret_observation(
         self,
