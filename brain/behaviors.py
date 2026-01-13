@@ -166,9 +166,12 @@ class WanderBehavior(Behavior):
 
     async def run(self) -> BehaviorResult:
         elapsed = 0.0
-        check_interval = 0.2
+        check_interval = 0.3
         distance_traveled = 0.0
         turns_made = 0
+        stall_check_count = 0
+        last_pose_x = self.robot.pose.x
+        last_pose_y = self.robot.pose.y
 
         logger.info(f"Starting wander for {self.duration}s")
 
@@ -183,6 +186,8 @@ class WanderBehavior(Behavior):
                 await self.robot.turn(turn_angle)
                 turns_made += 1
                 elapsed += 1.5
+                last_pose_x = self.robot.pose.x
+                last_pose_y = self.robot.pose.y
                 continue
 
             if self.robot.sensors.is_picked_up:
@@ -192,6 +197,32 @@ class WanderBehavior(Behavior):
                     "Robot picked up"
                 )
 
+            # Stall detection - check if we're actually moving
+            current_x = self.robot.pose.x
+            current_y = self.robot.pose.y
+            movement = math.sqrt((current_x - last_pose_x)**2 + (current_y - last_pose_y)**2)
+
+            # If we've been driving but haven't moved much, we're probably stuck
+            if stall_check_count > 3 and movement < 5.0:  # Less than 5mm movement
+                logger.info("Stall detected! Backing up and turning")
+                await self.robot.stop()
+                await self.robot.drive(-self.speed, duration=0.7)
+                await asyncio.sleep(0.7)
+                turn_angle = random.choice([-120, -90, 90, 120])
+                await self.robot.turn(turn_angle)
+                turns_made += 1
+                elapsed += 1.5
+                stall_check_count = 0
+                last_pose_x = self.robot.pose.x
+                last_pose_y = self.robot.pose.y
+                continue
+
+            stall_check_count += 1
+            if stall_check_count > 5:  # Reset periodically
+                last_pose_x = current_x
+                last_pose_y = current_y
+                stall_check_count = 0
+
             # Random turn decision
             if random.random() < self.turn_probability:
                 await self.robot.stop()
@@ -199,6 +230,9 @@ class WanderBehavior(Behavior):
                 await self.robot.turn(turn_angle)
                 turns_made += 1
                 elapsed += abs(turn_angle) / 45  # rough estimate
+                last_pose_x = self.robot.pose.x
+                last_pose_y = self.robot.pose.y
+                stall_check_count = 0
 
             # Drive forward
             await self.robot.drive(self.speed)

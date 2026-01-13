@@ -11,6 +11,7 @@ from typing import Optional, Callable, Any
 from dataclasses import dataclass, field
 from datetime import datetime
 
+import config
 from cozmo_interface.robot import CozmoRobot
 from brain.behaviors import (
     Behavior, BehaviorFactory, BehaviorStatus, BehaviorResult
@@ -86,9 +87,9 @@ class StateMachine:
         self._on_goal_complete: Optional[Callable] = None
 
         # Configuration
-        self.llm_query_interval = 30.0  # seconds
+        self.llm_query_interval = config.LLM_QUERY_INTERVAL
         self.max_stuck_attempts = 3
-        self.low_battery_threshold = 3.5  # volts
+        self.low_battery_threshold = config.LOW_BATTERY_VOLTAGE
 
     @property
     def is_running(self) -> bool:
