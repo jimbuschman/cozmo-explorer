@@ -123,9 +123,6 @@ class CozmoRobot:
             # Register event handlers
             self._setup_handlers()
 
-            # Enable sensor streaming
-            self._client.enable_all_reaction_triggers(True)
-
             self._state = RobotState.CONNECTED
             self._connected_event.set()
             logger.info("Connected to Cozmo!")
@@ -141,23 +138,29 @@ class CozmoRobot:
         if self._client is None:
             return
 
-        # Image handler
-        self._client.add_handler(
-            pycozmo.event.EvtNewRawCameraImage,
-            self._on_camera_image
-        )
+        try:
+            # Image handler
+            if hasattr(pycozmo.event, 'EvtNewRawCameraImage'):
+                self._client.add_handler(
+                    pycozmo.event.EvtNewRawCameraImage,
+                    self._on_camera_image
+                )
 
-        # Cliff detection
-        self._client.add_handler(
-            pycozmo.event.EvtCliffDetectedChange,
-            self._on_cliff_detected
-        )
+            # Cliff detection
+            if hasattr(pycozmo.event, 'EvtCliffDetectedChange'):
+                self._client.add_handler(
+                    pycozmo.event.EvtCliffDetectedChange,
+                    self._on_cliff_detected
+                )
 
-        # Robot state updates
-        self._client.add_handler(
-            pycozmo.event.EvtRobotStateUpdated,
-            self._on_state_updated
-        )
+            # Robot state updates
+            if hasattr(pycozmo.event, 'EvtRobotStateUpdated'):
+                self._client.add_handler(
+                    pycozmo.event.EvtRobotStateUpdated,
+                    self._on_state_updated
+                )
+        except Exception as e:
+            logger.warning(f"Could not set up some event handlers: {e}")
 
     def _on_camera_image(self, cli, image):
         """Handle new camera frame"""
