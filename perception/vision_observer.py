@@ -164,8 +164,8 @@ class VisionObserver:
         if self.save_images:
             await self._save_description(description, pos_x, pos_y, timestamp)
 
-        # Have Cozmo speak the description
-        if self.voice and self.speak_descriptions:
+        # Have Cozmo speak the description (if voice is enabled)
+        if self.voice and self.speak_descriptions and config.ENABLE_VOICE:
             try:
                 # Shorten very long descriptions for speech
                 speech_text = description[:150] if len(description) > 150 else description

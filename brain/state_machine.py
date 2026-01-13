@@ -270,8 +270,8 @@ class StateMachine:
                 )
                 self.set_goal(goal)
 
-                # Speak if there's something to say
-                if decision.speak and self.voice:
+                # Speak if there's something to say (and voice is enabled)
+                if decision.speak and self.voice and config.ENABLE_VOICE:
                     try:
                         await self.voice.speak(decision.speak)
                     except Exception as e:

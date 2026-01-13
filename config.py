@@ -22,6 +22,7 @@ TOKEN_BUDGET = 32000
 
 # Robot settings
 COZMO_LOG_LEVEL = "INFO"
+ENABLE_VOICE = False  # Disable TTS - causes pycozmo audio buffer errors
 
 # Behavior settings
 WANDER_SPEED = 50.0  # mm/s
