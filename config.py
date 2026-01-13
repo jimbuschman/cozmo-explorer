@@ -14,8 +14,11 @@ CHROMA_PATH = DATA_DIR / "chroma"
 
 # LLM settings
 OLLAMA_HOST = "http://localhost:11434"
-OLLAMA_MODEL = "llama3.2:latest"  # Change to your preferred model
+OLLAMA_MODEL = "gemma3:latest"  # Gemma3 has larger context window
 EMBEDDING_MODEL = "nomic-embed-text"
+
+# Token budget (Gemma3 supports up to 128k, but we'll use 32k to be safe)
+TOKEN_BUDGET = 32000
 
 # Robot settings
 COZMO_LOG_LEVEL = "INFO"

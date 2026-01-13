@@ -17,6 +17,7 @@ from memory.experience_db import ExperienceDB
 from memory.spatial_map import SpatialMap
 from memory.state_store import StateStore
 from perception.vision_observer import VisionObserver
+from brain.personality import CozmoPersonality, get_random_line
 
 # Configure logging
 logging.basicConfig(
@@ -40,6 +41,7 @@ class CozmoExplorer:
         self.state_store = StateStore()
         self.state_machine: StateMachine = None
         self.vision_observer: VisionObserver = None
+        self.personality = CozmoPersonality()  # Alien explorer mode!
 
         self._running = False
         self._start_time: datetime = None
@@ -74,6 +76,8 @@ class CozmoExplorer:
         await self.llm.connect()
         if await self.llm.health_check():
             logger.info(f"LLM ready: {self.llm.model}")
+            # Set up alien explorer personality
+            self.llm.set_personality(self.personality)
         else:
             logger.warning("LLM not available - running in autonomous-only mode")
 
@@ -88,18 +92,7 @@ class CozmoExplorer:
 
         logger.info("Robot connected!")
 
-        # Initialize state machine
-        self.state_machine = StateMachine(
-            robot=self.robot,
-            llm_client=self.llm,
-            memory=self.experiences
-        )
-
-        # Set up callbacks
-        self.state_machine.set_state_change_callback(self._on_state_change)
-        self.state_machine.set_goal_complete_callback(self._on_goal_complete)
-
-        # Initialize vision observer
+        # Initialize vision observer first (state machine needs it)
         self.vision_observer = VisionObserver(
             robot=self.robot,
             llm_client=self.llm,
@@ -109,7 +102,34 @@ class CozmoExplorer:
             save_images=True  # Save images to data/images/
         )
 
+        # Initialize state machine with all memory systems
+        self.state_machine = StateMachine(
+            robot=self.robot,
+            llm_client=self.llm,
+            memory=self.experiences,
+            spatial_map=self.spatial_map,
+            vision_observer=self.vision_observer
+        )
+
+        # Give state machine access to voice for speaking decisions
+        if self.vision_observer.voice:
+            self.state_machine.voice = self.vision_observer.voice
+
+        # Set up callbacks
+        self.state_machine.set_state_change_callback(self._on_state_change)
+        self.state_machine.set_goal_complete_callback(self._on_goal_complete)
+
+        # Connect vision observations to memory context
+        self._setup_vision_callback()
+
         logger.info("Initialization complete!")
+
+        # Log mission start to journal
+        self.personality.log_milestone(
+            "Mission Started",
+            f"Beginning exploration. Previous experiences: {exp_count}. Systems nominal."
+        )
+
         return True
 
     async def run(self):
@@ -195,6 +215,16 @@ class CozmoExplorer:
         except Exception as e:
             logger.error(f"Failed to save map: {e}")
 
+        # Log mission end to journal
+        self.personality.log_milestone(
+            "Mission Ended",
+            f"Exploration session complete. Duration: {duration:.0f}s. "
+            f"Area visited: {self.spatial_map.get_visited_percentage()*100:.1f}%"
+        )
+
+        # Print final memory usage
+        self.llm.memory.print_usage()
+
         # Disconnect
         await self.robot.disconnect()
         await self.llm.close()
@@ -219,6 +249,40 @@ class CozmoExplorer:
             goal.description,
             {"success": success, "goal_type": goal.goal_type}
         )
+
+        # Update memory context with outcome
+        if self.state_machine and self.state_machine.memory_context:
+            outcome = "completed" if success else "failed"
+            self.state_machine.memory_context.update_last_decision_outcome(outcome, success)
+
+    def _setup_vision_callback(self):
+        """Set up callback to feed vision observations to memory context"""
+        if not self.vision_observer:
+            return
+
+        # Store original method
+        original_capture = self.vision_observer._capture_and_analyze
+
+        async def capture_with_context_update():
+            """Wrapper that updates memory context after capture"""
+            observation = await original_capture()
+            if observation and self.state_machine:
+                # Update memory context with current observation
+                self.state_machine.memory_context.set_current_observation(
+                    observation.description
+                )
+
+                # Add to conversation memory
+                self.llm.add_observation_to_memory(observation.description)
+
+                # Log to personality journal
+                location = (self.robot.pose.x, self.robot.pose.y)
+                self.personality.log_observation(observation.description, location)
+
+            return observation
+
+        # Replace with wrapped version
+        self.vision_observer._capture_and_analyze = capture_with_context_update
 
     def _print_status(self):
         """Print current status"""

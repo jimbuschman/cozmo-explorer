@@ -118,8 +118,10 @@ class CozmoVoice:
             # Load and resample to 22kHz
             y, sr = librosa.load(input_path, sr=22050, mono=True)
 
-            # Convert to 16-bit integer
-            y_int = (y * 32767).astype(np.int16)
+            # Clip to valid range and convert to 16-bit integer
+            # librosa can return values slightly outside [-1.0, 1.0] after processing
+            y_clipped = np.clip(y, -1.0, 1.0)
+            y_int = (y_clipped * 32767).astype(np.int16)
 
             # Save as WAV
             sf.write(str(output_path), y_int, 22050, subtype='PCM_16')

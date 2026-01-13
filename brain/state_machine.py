@@ -16,6 +16,8 @@ from cozmo_interface.robot import CozmoRobot
 from brain.behaviors import (
     Behavior, BehaviorFactory, BehaviorStatus, BehaviorResult
 )
+from brain.memory_context import MemoryContext
+from llm.client import LLMDecision
 
 logger = logging.getLogger(__name__)
 
@@ -69,11 +71,15 @@ class StateMachine:
         self,
         robot: CozmoRobot,
         llm_client=None,
-        memory=None
+        memory=None,
+        spatial_map=None,
+        vision_observer=None
     ):
         self.robot = robot
         self.llm_client = llm_client
-        self.memory = memory
+        self.memory = memory  # ExperienceDB
+        self.spatial_map = spatial_map
+        self.vision_observer = vision_observer
 
         self.behaviors = BehaviorFactory(robot)
         self.state = RobotState.IDLE
@@ -81,6 +87,16 @@ class StateMachine:
 
         self._running = False
         self._current_behavior: Optional[Behavior] = None
+
+        # Memory context builder for rich LLM queries
+        self.memory_context = MemoryContext(
+            experience_db=memory,
+            spatial_map=spatial_map,
+            vision_observer=vision_observer
+        )
+
+        # Voice for speaking (will be set from vision_observer if available)
+        self.voice = None
 
         # Callbacks for external monitoring
         self._on_state_change: Optional[Callable] = None
@@ -211,7 +227,7 @@ class StateMachine:
         return elapsed > self.llm_query_interval
 
     async def _query_llm_for_guidance(self):
-        """Ask the LLM what to do next"""
+        """Ask the LLM what to do next using rich memory context"""
         if self.llm_client is None:
             # No LLM, use default behavior
             self.set_goal(Goal(
@@ -224,16 +240,47 @@ class StateMachine:
         await self._change_state(RobotState.WAITING_FOR_LLM)
 
         try:
-            # Build context for LLM
-            state_summary = self._build_state_summary()
+            # Build rich context from all memory systems
+            context_snapshot = await self.memory_context.build_context(
+                robot=self.robot,
+                current_state=self.state.name,
+                exploration_time=self.context.exploration_time,
+                stuck_count=self.context.stuck_count
+            )
 
-            # Query LLM
-            response = await self.llm_client.query_for_goal(state_summary)
+            # Format context for LLM
+            context_prompt = self.memory_context.format_for_llm(context_snapshot)
 
-            if response:
-                goal = self._parse_llm_response(response)
-                if goal:
-                    self.set_goal(goal)
+            # Get structured decision from LLM
+            decision: LLMDecision = await self.llm_client.get_decision(context_prompt)
+
+            if decision.is_valid():
+                # Record the decision in memory
+                self.memory_context.record_decision(
+                    action=decision.action,
+                    target=decision.target,
+                    reasoning=decision.reasoning
+                )
+
+                # Convert decision to goal
+                goal = Goal(
+                    description=decision.reasoning or f"{decision.action}: {decision.target or 'general'}",
+                    goal_type=decision.action,
+                    parameters={"target": decision.target} if decision.target else {}
+                )
+                self.set_goal(goal)
+
+                # Speak if there's something to say
+                if decision.speak and self.voice:
+                    try:
+                        await self.voice.speak(decision.speak)
+                    except Exception as e:
+                        logger.debug(f"Could not speak: {e}")
+
+                logger.info(f"LLM decided: {decision.action} -> {decision.target or 'general'}")
+                logger.info(f"Reasoning: {decision.reasoning}")
+            else:
+                logger.warning(f"Invalid decision from LLM: {decision.action}")
 
             self.context.last_llm_query = datetime.now()
 

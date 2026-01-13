@@ -6,14 +6,31 @@ Handles communication with the Ollama LLM for high-level decision making.
 import asyncio
 import logging
 import json
-from typing import Optional
+import re
+from typing import Optional, Dict, Any
 from datetime import datetime
+from dataclasses import dataclass
 
 import httpx
 
 import config
+from llm.prompts import DECISION_SYSTEM_PROMPT, VISION_SYSTEM_PROMPT
+from memory.conversation_memory import ConversationMemory, MemoryItem, estimate_tokens
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class LLMDecision:
+    """Structured decision from the LLM"""
+    action: str  # explore, investigate, go_to, idle
+    target: Optional[str] = None
+    reasoning: str = ""
+    speak: Optional[str] = None
+    raw_response: str = ""
+
+    def is_valid(self) -> bool:
+        return self.action in ("explore", "investigate", "go_to", "idle")
 
 
 class LLMClient:
@@ -39,54 +56,17 @@ class LLMClient:
         self.timeout = timeout or config.LLM_TIMEOUT
 
         self._client: Optional[httpx.AsyncClient] = None
-        self._system_prompt = self._build_system_prompt()
-        self._vision_prompt = self._build_vision_prompt()
+        self._system_prompt = DECISION_SYSTEM_PROMPT
+        self._vision_prompt = VISION_SYSTEM_PROMPT
 
-    def _build_vision_prompt(self) -> str:
-        return """You are the eyes of an autonomous Cozmo robot exploring a house.
+        # Conversation memory with token-budgeted pools
+        self.memory = ConversationMemory(
+            global_budget=config.TOKEN_BUDGET,
+            summarizer=self._summarize_text
+        )
 
-Your job is to describe what you see in images from the robot's camera. Be concise but informative.
-
-Focus on:
-- Objects (furniture, items, obstacles)
-- The environment (room type, floor, walls)
-- Anything interesting or unusual
-- Potential obstacles or hazards
-
-Keep descriptions to 1-2 sentences. Be specific about what you see."""
-
-    def _build_system_prompt(self) -> str:
-        return """You are the decision-making brain of an autonomous Cozmo robot exploring a house.
-
-Your role is to:
-1. Analyze the robot's current state and sensor data
-2. Decide what the robot should do next
-3. Provide clear, actionable goals
-
-The robot can:
-- EXPLORE: Wander and discover new areas
-- INVESTIGATE: Look closely at something interesting
-- GO_TO: Navigate to a specific location (if it knows coordinates)
-- IDLE: Wait and conserve energy
-
-IMPORTANT - Cozmo battery levels:
-- 4.5V+ = FULL battery, explore freely
-- 4.0-4.5V = GOOD battery, keep exploring
-- 3.7-4.0V = MEDIUM battery, can still explore
-- 3.5-3.7V = LOW battery, consider charging soon
-- Below 3.5V = CRITICAL, must charge
-
-Guidelines:
-- Be curious! Encourage exploration of unexplored areas
-- If battery is above 3.7V, prioritize exploration over charging
-- If the robot is stuck, suggest alternative approaches
-- Keep responses concise and action-oriented
-
-Respond with a clear goal statement. Examples:
-- "Explore: Continue exploring to the north where you haven't been"
-- "Investigate: That looks like a new object, take a closer look"
-- "Idle: Battery is low, wait for it to charge before continuing"
-"""
+        # Personality (will be set by main.py if using alien explorer mode)
+        self.personality = None
 
     async def connect(self):
         """Initialize the HTTP client"""
@@ -99,6 +79,43 @@ Respond with a clear goal statement. Examples:
         if self._client:
             await self._client.aclose()
             self._client = None
+
+    async def _summarize_text(self, text: str) -> Optional[str]:
+        """Summarize text for memory compression"""
+        if not text or len(text) < 100:
+            return text
+
+        try:
+            prompt = f"""Summarize this exploration log in 2-3 sentences, preserving key discoveries and decisions:
+
+{text}
+
+Summary:"""
+            response = await self._chat(prompt)
+            return response.strip()
+        except Exception as e:
+            logger.error(f"Summarization failed: {e}")
+            return None
+
+    def set_personality(self, personality):
+        """Set the personality module for alien explorer mode"""
+        self.personality = personality
+        if personality:
+            # Set core identity from personality
+            self.memory.set_core_memory(personality.get_identity_prompt())
+            logger.info("Personality set: Alien Explorer mode activated")
+
+    def add_observation_to_memory(self, observation: str):
+        """Add a visual observation to conversation memory"""
+        self.memory.add_observation(observation)
+
+    def add_decision_to_memory(self, action: str, reasoning: str):
+        """Add a decision to conversation memory"""
+        self.memory.add_decision(action, reasoning)
+
+    def add_recall_to_memory(self, memory_text: str, relevance: float = 1.0):
+        """Add a recalled memory from ChromaDB"""
+        self.memory.add_recall(memory_text, relevance)
 
     async def query_for_goal(self, state_summary: dict) -> Optional[str]:
         """
@@ -123,6 +140,158 @@ Respond with a clear goal statement. Examples:
         except Exception as e:
             logger.error(f"LLM query failed: {e}")
             return None
+
+    async def get_decision(self, context_prompt: str) -> LLMDecision:
+        """
+        Get a structured decision from the LLM with conversation memory.
+
+        Args:
+            context_prompt: Formatted context string from MemoryContext
+
+        Returns:
+            LLMDecision with parsed action, target, reasoning, and speak
+        """
+        if self._client is None:
+            await self.connect()
+
+        try:
+            # Build full prompt with conversation memory
+            full_prompt = self._build_decision_prompt(context_prompt)
+
+            response = await self._chat(full_prompt)
+            logger.info(f"LLM decision response: {response[:150]}...")
+
+            decision = self._parse_decision_response(response)
+            decision.raw_response = response
+
+            # Store the decision in conversation memory
+            if decision.is_valid():
+                self.add_decision_to_memory(decision.action, decision.reasoning)
+
+                # Log to personality journal if available
+                if self.personality and decision.speak:
+                    self.personality.log_thought(decision.speak)
+
+            return decision
+
+        except Exception as e:
+            logger.error(f"Decision query failed: {e}")
+            return LLMDecision(
+                action="explore",
+                reasoning=f"LLM query failed: {e}",
+                raw_response=""
+            )
+
+    def _build_decision_prompt(self, context_prompt: str) -> str:
+        """Build full prompt with conversation memory"""
+        # Estimate tokens for the new context
+        context_tokens = estimate_tokens(context_prompt)
+        available_for_memory = config.TOKEN_BUDGET - context_tokens - ConversationMemory.OVERHEAD_TOKENS
+
+        # Gather conversation memory
+        memory_items = self.memory.gather_context(available_for_memory)
+        memory_text = self.memory.format_for_prompt(memory_items)
+
+        # Combine memory + current context
+        parts = []
+
+        if memory_text:
+            parts.append(memory_text)
+
+        parts.append(context_prompt)
+
+        # Add personality session summary if available
+        if self.personality:
+            parts.append("")
+            parts.append(self.personality.get_session_summary())
+
+        return "\n\n".join(parts)
+
+    def _parse_decision_response(self, response: str) -> LLMDecision:
+        """
+        Parse LLM response into a structured LLMDecision.
+
+        Tries to extract JSON, falls back to keyword parsing if that fails.
+        """
+        # Try to find JSON in the response
+        json_data = self._extract_json(response)
+
+        if json_data:
+            return LLMDecision(
+                action=json_data.get("action", "explore").lower(),
+                target=json_data.get("target"),
+                reasoning=json_data.get("reasoning", ""),
+                speak=json_data.get("speak")
+            )
+
+        # Fallback: keyword-based parsing
+        logger.warning("Could not parse JSON from LLM response, using keyword fallback")
+        return self._keyword_parse(response)
+
+    def _extract_json(self, text: str) -> Optional[Dict[str, Any]]:
+        """
+        Extract JSON object from text that may contain other content.
+        """
+        # Try to find JSON block (with or without markdown code fences)
+        patterns = [
+            r'```json\s*(.*?)\s*```',  # Markdown JSON block
+            r'```\s*(.*?)\s*```',       # Generic code block
+            r'(\{[^{}]*"action"[^{}]*\})',  # JSON with action key
+            r'(\{.*?\})',               # Any JSON object
+        ]
+
+        for pattern in patterns:
+            matches = re.findall(pattern, text, re.DOTALL)
+            for match in matches:
+                try:
+                    data = json.loads(match.strip())
+                    if isinstance(data, dict) and "action" in data:
+                        return data
+                except json.JSONDecodeError:
+                    continue
+
+        # Try parsing the whole response as JSON
+        try:
+            data = json.loads(text.strip())
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            pass
+
+        return None
+
+    def _keyword_parse(self, response: str) -> LLMDecision:
+        """
+        Fallback keyword-based parsing when JSON extraction fails.
+        """
+        response_lower = response.lower()
+
+        if "investigate" in response_lower or "look" in response_lower:
+            action = "investigate"
+        elif "go to" in response_lower or "navigate" in response_lower or "head" in response_lower:
+            action = "go_to"
+        elif "wait" in response_lower or "idle" in response_lower or "rest" in response_lower:
+            action = "idle"
+        else:
+            action = "explore"
+
+        # Try to extract a target from the response
+        target = None
+        target_patterns = [
+            r'(?:investigate|look at|check out|go to|head toward)\s+(?:the\s+)?([^.!?\n]+)',
+            r'(?:north|south|east|west)',
+        ]
+        for pattern in target_patterns:
+            match = re.search(pattern, response_lower)
+            if match:
+                target = match.group(1) if match.lastindex else match.group(0)
+                break
+
+        return LLMDecision(
+            action=action,
+            target=target,
+            reasoning=response[:200]  # Use first part of response as reasoning
+        )
 
     async def describe_image(self, image_base64: str, context: str = "") -> Optional[str]:
         """
