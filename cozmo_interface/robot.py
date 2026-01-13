@@ -153,24 +153,21 @@ class CozmoRobot:
                     self._on_cliff_detected
                 )
 
-            # Robot state updates
+            # Robot state updates - use protocol_encoder.RobotState for pose data
+            # This gives us direct access to pose_x, pose_y, pose_angle_rad
+            if hasattr(pycozmo, 'protocol_encoder') and hasattr(pycozmo.protocol_encoder, 'RobotState'):
+                self._client.add_handler(
+                    pycozmo.protocol_encoder.RobotState,
+                    self._on_robot_state_packet
+                )
+                logger.info("Registered for RobotState packets (pose tracking)")
+
+            # Also try the event-based handler as fallback
             if hasattr(pycozmo.event, 'EvtRobotStateUpdated'):
                 self._client.add_handler(
                     pycozmo.event.EvtRobotStateUpdated,
                     self._on_state_updated
                 )
-
-            # Odometry update event (if available)
-            if hasattr(pycozmo.event, 'EvtRobotOdometryUpdate'):
-                self._client.add_handler(
-                    pycozmo.event.EvtRobotOdometryUpdate,
-                    self._on_odometry_update
-                )
-
-            # Try to enable odometry tracking
-            if hasattr(self._client, 'enable_odometry'):
-                self._client.enable_odometry(enable=True)
-                logger.info("Odometry tracking enabled")
 
         except Exception as e:
             logger.warning(f"Could not set up some event handlers: {e}")
@@ -188,6 +185,49 @@ class CozmoRobot:
             self._sensors.cliff_detected = args[0]
             if args[0]:
                 logger.warning("Cliff detected!")
+
+    def _on_robot_state_packet(self, cli, pkt):
+        """Handle robot state updates from RobotState packets.
+
+        This is the primary method for getting pose data from pycozmo.
+        The packet has direct attributes: pose_x, pose_y, pose_z, pose_angle_rad
+        """
+        try:
+            # Update sensor data from packet
+            self._sensors.battery_voltage = getattr(pkt, 'battery_voltage', self._sensors.battery_voltage)
+            self._sensors.head_angle = getattr(pkt, 'head_angle_rad', self._sensors.head_angle)
+            self._sensors.lift_height = getattr(pkt, 'lift_height_mm', self._sensors.lift_height)
+
+            # Update pose directly from packet attributes
+            self._pose.x = getattr(pkt, 'pose_x', self._pose.x)
+            self._pose.y = getattr(pkt, 'pose_y', self._pose.y)
+            self._pose.angle = getattr(pkt, 'pose_angle_rad', self._pose.angle)
+
+            # Sync to sensors
+            self._sensors.pose_x = self._pose.x
+            self._sensors.pose_y = self._pose.y
+            self._sensors.pose_angle = self._pose.angle
+
+            # Check for cliff from raw data if available
+            cliff_data = getattr(pkt, 'cliff_data_raw', None)
+            if cliff_data:
+                # Cliff detected if any sensor reads low (close to edge)
+                self._sensors.cliff_detected = not any(r > 100 for r in cliff_data)
+
+            # Check pickup status
+            self._sensors.is_picked_up = getattr(pkt, 'is_picked_up', False)
+            self._sensors.is_on_charger = getattr(pkt, 'is_on_charger', False)
+
+            # Accelerometer/gyro if available
+            self._sensors.accel_x = getattr(pkt, 'accel_x', 0.0)
+            self._sensors.accel_y = getattr(pkt, 'accel_y', 0.0)
+            self._sensors.accel_z = getattr(pkt, 'accel_z', 0.0)
+            self._sensors.gyro_x = getattr(pkt, 'gyro_x', 0.0)
+            self._sensors.gyro_y = getattr(pkt, 'gyro_y', 0.0)
+            self._sensors.gyro_z = getattr(pkt, 'gyro_z', 0.0)
+
+        except Exception as e:
+            logger.debug(f"Error processing RobotState packet: {e}")
 
     def _on_state_updated(self, cli, *args):
         """Handle robot state update"""
