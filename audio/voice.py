@@ -117,38 +117,68 @@ class CozmoVoice:
             logger.error(f"Audio processing failed: {e}")
             return None
 
-    def _convert_for_cozmo(self, input_path: str) -> Optional[str]:
-        """Convert audio to Cozmo-compatible format (22kHz, 16-bit mono)"""
-        output_path = self._temp_dir / "cozmo_speech.wav"
+    def _convert_for_cozmo(self, input_path: str) -> list[str]:
+        """
+        Convert audio to Cozmo-compatible format (22kHz, 16-bit mono).
 
-        # Max duration in seconds - pycozmo buffer can't handle long audio
-        MAX_DURATION = 2.0
+        Splits long audio into chunks since pycozmo buffer can't handle
+        audio longer than ~2 seconds.
+
+        Returns:
+            List of paths to WAV file chunks, or empty list if failed
+        """
+        # Max duration per chunk in seconds - pycozmo buffer limitation
+        CHUNK_DURATION = 2.0
+        sr = 22050
 
         try:
             # Load and resample to 22kHz
-            y, sr = librosa.load(input_path, sr=22050, mono=True)
+            y, orig_sr = librosa.load(input_path, sr=sr, mono=True)
 
-            # Truncate if too long (pycozmo audio buffer limitation)
-            max_samples = int(MAX_DURATION * sr)
-            if len(y) > max_samples:
-                logger.warning(f"Audio too long ({len(y)/sr:.1f}s), truncating to {MAX_DURATION}s")
-                y = y[:max_samples]
-                # Add fade out to avoid click
-                fade_len = int(sr * 0.05)
-                y[-fade_len:] *= np.linspace(1, 0, fade_len)
+            # Normalize the audio
+            y = librosa.util.normalize(y)
 
-            # Clip to valid range and add safety margin
-            y_clipped = np.clip(y, -1.0, 1.0)
+            # Split into chunks
+            chunk_samples = int(CHUNK_DURATION * sr)
+            num_chunks = max(1, (len(y) + chunk_samples - 1) // chunk_samples)
 
-            # Convert to 16-bit with 0.5 safety margin (like test_audio_simple.py)
-            # This ensures values stay well within int16 range
-            y_int16 = (y_clipped * 32767 * 0.5).astype(np.int16)
+            saved_files = []
+            silence_threshold = 0.001
 
-            # Save as 16-bit PCM WAV
-            sf.write(str(output_path), y_int16, 22050, subtype='PCM_16')
+            for i in range(num_chunks):
+                start = i * chunk_samples
+                end = min(start + chunk_samples, len(y))
+                chunk = y[start:end]
 
-            logger.info(f"Converted audio: {output_path} ({len(y_int16)/sr:.1f}s)")
-            return str(output_path)
+                # Skip very quiet chunks
+                if np.abs(chunk).mean() < silence_threshold:
+                    continue
+
+                # Add fade in/out to avoid clicks
+                fade_len = int(sr * 0.02)  # 20ms fade
+                if len(chunk) > fade_len * 2:
+                    # Fade in at start
+                    chunk[:fade_len] *= np.linspace(0, 1, fade_len)
+                    # Fade out at end
+                    chunk[-fade_len:] *= np.linspace(1, 0, fade_len)
+
+                # Clip to valid range
+                chunk_clipped = np.clip(chunk, -1.0, 1.0)
+
+                # Convert to 16-bit with 0.5 safety margin
+                chunk_int16 = (chunk_clipped * 32767 * 0.5).astype(np.int16)
+
+                # Save chunk with part number
+                chunk_path = self._temp_dir / f"cozmo_speech_part{i+1}.wav"
+                sf.write(str(chunk_path), chunk_int16, sr, subtype='PCM_16')
+                saved_files.append(str(chunk_path))
+
+                logger.debug(f"Saved chunk {i+1}: {chunk_path} ({len(chunk)/sr:.2f}s)")
+
+            total_duration = len(y) / sr
+            logger.info(f"Converted audio: {len(saved_files)} chunk(s), {total_duration:.1f}s total")
+            return saved_files
+
         except Exception as e:
             logger.error(f"Cozmo conversion failed: {e}")
             try:
@@ -156,9 +186,9 @@ class CozmoVoice:
                 error_log.log_error("voice", f"Cozmo conversion failed: {input_path}", e)
             except:
                 pass
-            return None
+            return []
 
-    def generate_speech(self, text: str) -> Optional[str]:
+    def generate_speech(self, text: str) -> list[str]:
         """
         Generate Cozmo-compatible speech audio from text.
 
@@ -166,30 +196,32 @@ class CozmoVoice:
             text: Text to speak
 
         Returns:
-            Path to WAV file, or None if generation failed
+            List of paths to WAV file chunks, or empty list if failed
         """
         if not HAS_AUDIO_DEPS:
             logger.warning("Cannot generate speech - missing dependencies")
-            return None
+            return []
 
         # Step 1: Generate raw TTS
         raw_path = self._generate_raw_audio(text)
         if not raw_path or not os.path.exists(raw_path):
-            return None
+            return []
 
         # Step 2: Apply robot effects
         robot_path = self._apply_robot_effects(raw_path)
         if not robot_path:
-            return None
+            return []
 
-        # Step 3: Convert for Cozmo
-        cozmo_path = self._convert_for_cozmo(robot_path)
+        # Step 3: Convert for Cozmo (returns list of chunk paths)
+        chunk_paths = self._convert_for_cozmo(robot_path)
 
-        return cozmo_path
+        return chunk_paths
 
     async def speak(self, text: str) -> bool:
         """
         Generate speech and play it through Cozmo's speaker.
+
+        Handles chunked audio by playing each chunk sequentially.
 
         Args:
             text: Text to speak
@@ -201,28 +233,34 @@ class CozmoVoice:
             logger.warning("No robot connected - cannot play audio")
             return False
 
-        # Generate the audio file
+        # Generate the audio files (may be multiple chunks)
         logger.info(f"Generating speech: '{text[:50]}...'")
-        audio_path = self.generate_speech(text)
-        if not audio_path:
+        audio_paths = self.generate_speech(text)
+        if not audio_paths:
             logger.warning(f"Failed to generate speech for: {text[:50]}...")
             return False
 
-        logger.info(f"Audio generated: {audio_path}")
+        logger.info(f"Audio generated: {len(audio_paths)} chunk(s)")
 
-        # Play through Cozmo
-        try:
-            await self.robot.play_audio(audio_path)
-            logger.info(f"Spoke: {text[:50]}...")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to play audio on Cozmo: {e}")
+        # Play each chunk through Cozmo sequentially
+        success = True
+        for i, audio_path in enumerate(audio_paths):
             try:
-                from brain.personality import error_log
-                error_log.log_error("voice", f"Failed to play audio: {text[:30]}", e, {"path": audio_path})
-            except:
-                pass
-            return False
+                logger.debug(f"Playing chunk {i+1}/{len(audio_paths)}: {audio_path}")
+                await self.robot.play_audio(audio_path, wait=True)
+            except Exception as e:
+                logger.error(f"Failed to play audio chunk {i+1} on Cozmo: {e}")
+                try:
+                    from brain.personality import error_log
+                    error_log.log_error("voice", f"Failed to play chunk {i+1}: {text[:30]}", e, {"path": audio_path})
+                except:
+                    pass
+                success = False
+                # Continue trying to play remaining chunks
+
+        if success:
+            logger.info(f"Spoke: {text[:50]}...")
+        return success
 
     def cleanup(self):
         """Clean up temporary files"""
@@ -242,13 +280,16 @@ async def test_voice():
         "I see a table with some objects on it.",
         "Exploring the living room now.",
         "Battery is getting low.",
+        "This is a longer sentence that should be split into multiple chunks to test the chunking functionality properly.",
     ]
 
     for text in test_texts:
         print(f"Generating: {text}")
-        path = voice.generate_speech(text)
-        if path:
-            print(f"  -> Saved to: {path}")
+        paths = voice.generate_speech(text)
+        if paths:
+            print(f"  -> Generated {len(paths)} chunk(s):")
+            for p in paths:
+                print(f"     {p}")
         else:
             print("  -> Failed!")
 

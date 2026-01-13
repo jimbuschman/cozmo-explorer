@@ -93,7 +93,7 @@ cozmo-explorer/
 │   └── prompts.py             # Centralized prompt templates
 │
 ├── audio/
-│   └── voice.py               # TTS + audio processing for speech
+│   └── voice.py               # TTS + audio processing for speech (chunked playback)
 │
 └── cozmo_interface/
     └── robot.py               # Wrapper around pycozmo
@@ -232,6 +232,28 @@ The LLM receives context from multiple memory pools, each with a token budget:
 - `data/chroma/` - ChromaDB semantic experience storage
 - `data/state.db` - SQLite state persistence
 - `data/spatial_map.npz` - Occupancy grid (where robot has been)
+
+## Audio System
+
+The voice module generates robot-like speech from text and plays it through Cozmo's speaker.
+
+**Pipeline:**
+1. **TTS Generation**: pyttsx3 generates raw speech WAV
+2. **Robot Effects**: librosa applies pitch shift (+4 steps) and time stretch (1.1x)
+3. **Chunked Conversion**: Audio split into 2-second chunks for pycozmo compatibility
+4. **Sequential Playback**: Each chunk played through Cozmo, waiting for completion
+
+**Why Chunking?**
+- pycozmo's audio buffer can't handle audio longer than ~2 seconds
+- Previous approach truncated audio, losing speech after 2s
+- Chunking preserves full speech by splitting into `_part1.wav`, `_part2.wav`, etc.
+- Each chunk has fade in/out (20ms) to prevent clicks between segments
+
+**Audio Format Requirements:**
+- Sample rate: 22050 Hz
+- Bit depth: 16-bit PCM
+- Channels: Mono
+- Max chunk duration: 2 seconds
 
 ## Resources
 

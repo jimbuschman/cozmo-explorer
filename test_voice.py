@@ -26,9 +26,11 @@ def test_generation():
 
     for text in test_texts:
         print(f"\nGenerating: '{text}'")
-        path = voice.generate_speech(text)
-        if path:
-            print(f"  Success! Saved to: {path}")
+        paths = voice.generate_speech(text)
+        if paths:
+            print(f"  Success! Generated {len(paths)} chunk(s):")
+            for p in paths:
+                print(f"    {p}")
         else:
             print("  Failed to generate!")
             return False
@@ -49,8 +51,10 @@ async def test_with_cozmo():
         def __init__(self, client):
             self.client = client
 
-        async def play_audio(self, wav_path: str):
+        async def play_audio(self, wav_path: str, wait: bool = True):
             self.client.play_audio(wav_path)
+            if wait:
+                self.client.wait_for(pycozmo.event.EvtAudioCompleted)
 
     print("Connecting to Cozmo...")
     cli = pycozmo.Client()
