@@ -166,12 +166,18 @@ class StateMachine:
             return True
 
         # Check battery
-        if self.robot.sensors.battery_voltage < self.low_battery_threshold:
+        if self.robot.sensors.battery_voltage > 0 and self.robot.sensors.battery_voltage < self.low_battery_threshold:
             if self.robot.sensors.is_on_charger:
                 await self._change_state(RobotState.CHARGING)
-            else:
-                logger.warning("Low battery! Looking for charger...")
-                # In future: navigate to charger
+                return True
+            elif self.state != RobotState.IDLE:
+                # Low battery but not on charger - go idle and warn once
+                logger.warning(f"Low battery ({self.robot.sensors.battery_voltage:.2f}V)! Place on charger.")
+                await self._change_state(RobotState.IDLE)
+                await self.robot.stop()
+                return True
+            # Already idle with low battery - don't block, just wait
+            await asyncio.sleep(2.0)
             return True
 
         # Check if on charger and charging complete
