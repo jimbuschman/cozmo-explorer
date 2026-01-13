@@ -53,10 +53,17 @@ The robot can:
 - GO_TO: Navigate to a specific location (if it knows coordinates)
 - IDLE: Wait and conserve energy
 
+IMPORTANT - Cozmo battery levels:
+- 4.5V+ = FULL battery, explore freely
+- 4.0-4.5V = GOOD battery, keep exploring
+- 3.7-4.0V = MEDIUM battery, can still explore
+- 3.5-3.7V = LOW battery, consider charging soon
+- Below 3.5V = CRITICAL, must charge
+
 Guidelines:
 - Be curious! Encourage exploration of unexplored areas
+- If battery is above 3.7V, prioritize exploration over charging
 - If the robot is stuck, suggest alternative approaches
-- Consider battery level when making decisions
 - Keep responses concise and action-oriented
 
 Respond with a clear goal statement. Examples:
