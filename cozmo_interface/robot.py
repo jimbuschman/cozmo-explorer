@@ -34,6 +34,7 @@ class RobotState(Enum):
 class SensorData:
     """Current sensor readings from the robot"""
     cliff_detected: bool = False
+    collision_detected: bool = False  # Set when accelerometer spike detected
     is_picked_up: bool = False
     is_on_charger: bool = False
     battery_voltage: float = 0.0
@@ -79,6 +80,8 @@ class CozmoRobot:
         self._last_image: Optional[Image.Image] = None
         self._image_callback: Optional[Callable] = None
         self._connected_event = asyncio.Event()
+        # For collision detection - track last horizontal accel
+        self._last_accel_xy: Optional[float] = None
 
     @property
     def state(self) -> RobotState:
@@ -218,12 +221,9 @@ class CozmoRobot:
             # Low values = sensor sees nothing = cliff/edge
             cliff_data = getattr(pkt, 'cliff_data_raw', None)
             if cliff_data:
-                # Count how many sensors see ground
-                sensors_on_ground = sum(1 for r in cliff_data if r > 100)
-                # Cliff detected if fewer than 2 sensors see ground
-                # This catches edge cases like [888, 0, 0, 0] where robot is at table edge
+                # Cliff detected if NO sensor sees the ground (all readings low)
                 was_cliff = self._sensors.cliff_detected
-                self._sensors.cliff_detected = sensors_on_ground < 2
+                self._sensors.cliff_detected = not any(r > 100 for r in cliff_data)
 
                 # IMMEDIATE STOP on cliff detection - don't wait for behavior loop
                 if self._sensors.cliff_detected and not was_cliff:
@@ -242,6 +242,18 @@ class CozmoRobot:
             self._sensors.gyro_x = getattr(pkt, 'gyro_x', 0.0)
             self._sensors.gyro_y = getattr(pkt, 'gyro_y', 0.0)
             self._sensors.gyro_z = getattr(pkt, 'gyro_z', 0.0)
+
+            # Collision detection - check for sudden horizontal acceleration spike
+            # This runs every ~30ms at packet level for fast response
+            accel_xy = np.sqrt(self._sensors.accel_x**2 + self._sensors.accel_y**2)
+            if self._last_accel_xy is not None:
+                accel_delta = abs(accel_xy - self._last_accel_xy)
+                if accel_delta > 800:  # Threshold for collision spike
+                    self._sensors.collision_detected = True
+                    logger.warning(f"COLLISION DETECTED! accel_delta={accel_delta:.1f} - Emergency stop!")
+                    if self._client:
+                        self._client.drive_wheels(0, 0)
+            self._last_accel_xy = accel_xy
 
         except Exception as e:
             logger.debug(f"Error processing RobotState packet: {e}")

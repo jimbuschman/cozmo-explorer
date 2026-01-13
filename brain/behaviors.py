@@ -173,11 +173,6 @@ class WanderBehavior(Behavior):
         last_pose_x = self.robot.pose.x
         last_pose_y = self.robot.pose.y
 
-        # Accelerometer tracking for collision detection
-        # Track horizontal acceleration (X/Y) - Z is dominated by gravity
-        last_accel_xy = None
-        COLLISION_THRESHOLD = 1500  # Horizontal acceleration spike indicating impact
-
         logger.info(f"Starting wander for {self.duration}s")
 
         while elapsed < self.duration and not self.is_cancelled:
@@ -207,32 +202,14 @@ class WanderBehavior(Behavior):
             current_y = self.robot.pose.y
             movement = math.sqrt((current_x - last_pose_x)**2 + (current_y - last_pose_y)**2)
 
-            # Collision detection using horizontal accelerometer spikes
-            # Z axis is dominated by gravity, so look at X/Y for impacts
-            accel_xy = math.sqrt(
-                self.robot.sensors.accel_x**2 +
-                self.robot.sensors.accel_y**2
-            )
-
-            # Check for collision (sudden horizontal acceleration spike)
-            collision_detected = False
-            if last_accel_xy is not None:
-                accel_delta = abs(accel_xy - last_accel_xy)
-                if accel_delta > COLLISION_THRESHOLD:
-                    collision_detected = True
-                    logger.info(f"Collision detected! accel_delta={accel_delta:.1f}")
-            last_accel_xy = accel_xy
-
-            # Debug: log tracking info
-            if stall_check_count % 3 == 0:
-                logger.debug(f"Stall check #{stall_check_count}: pose=({current_x:.1f}, {current_y:.1f}), movement={movement:.1f}mm, accel_xy={accel_xy:.1f}")
-
-            # Stall/collision detection
+            # Check for collision (detected at packet level for fast response)
+            # or stall (odometry shows no movement)
             is_stalled = False
-            if collision_detected:
+            if self.robot.sensors.collision_detected:
                 is_stalled = True
+                logger.info("Collision detected - backing up")
+                self.robot.sensors.collision_detected = False  # Clear flag
             elif stall_check_count > 5 and movement < 5.0:
-                # Odometry says no movement despite driving
                 is_stalled = True
                 logger.info(f"Stall detected (no odometry movement)! movement={movement:.1f}mm")
 
@@ -248,7 +225,6 @@ class WanderBehavior(Behavior):
                 stall_check_count = 0
                 last_pose_x = self.robot.pose.x
                 last_pose_y = self.robot.pose.y
-                last_accel_xy = None  # Reset collision detection
                 continue
 
             stall_check_count += 1
