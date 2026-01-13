@@ -173,9 +173,10 @@ class WanderBehavior(Behavior):
         last_pose_x = self.robot.pose.x
         last_pose_y = self.robot.pose.y
 
-        # Accelerometer history for vibration-based stall detection
-        accel_history = []
-        ACCEL_HISTORY_SIZE = 10  # Track last 10 readings
+        # Accelerometer tracking for collision detection
+        # Track horizontal acceleration (X/Y) - Z is dominated by gravity
+        last_accel_xy = None
+        COLLISION_THRESHOLD = 1500  # Horizontal acceleration spike indicating impact
 
         logger.info(f"Starting wander for {self.duration}s")
 
@@ -206,37 +207,34 @@ class WanderBehavior(Behavior):
             current_y = self.robot.pose.y
             movement = math.sqrt((current_x - last_pose_x)**2 + (current_y - last_pose_y)**2)
 
-            # Track accelerometer for vibration-based stall detection
-            # When robot moves normally, there's vibration. When stuck, less vibration.
-            accel_magnitude = math.sqrt(
+            # Collision detection using horizontal accelerometer spikes
+            # Z axis is dominated by gravity, so look at X/Y for impacts
+            accel_xy = math.sqrt(
                 self.robot.sensors.accel_x**2 +
-                self.robot.sensors.accel_y**2 +
-                self.robot.sensors.accel_z**2
+                self.robot.sensors.accel_y**2
             )
-            accel_history.append(accel_magnitude)
-            if len(accel_history) > ACCEL_HISTORY_SIZE:
-                accel_history.pop(0)
 
-            # Calculate accelerometer variance (vibration indicator)
-            # Raw pycozmo accel values are ~1000-10000, so variance is in thousands
-            accel_variance = 0.0
-            if len(accel_history) >= 5:
-                accel_mean = sum(accel_history) / len(accel_history)
-                accel_variance = sum((x - accel_mean)**2 for x in accel_history) / len(accel_history)
+            # Check for collision (sudden horizontal acceleration spike)
+            collision_detected = False
+            if last_accel_xy is not None:
+                accel_delta = abs(accel_xy - last_accel_xy)
+                if accel_delta > COLLISION_THRESHOLD:
+                    collision_detected = True
+                    logger.info(f"Collision detected! accel_delta={accel_delta:.1f}")
+            last_accel_xy = accel_xy
 
-            # Debug: log pose and accel tracking every few checks
+            # Debug: log tracking info
             if stall_check_count % 3 == 0:
-                logger.debug(f"Stall check #{stall_check_count}: pose=({current_x:.1f}, {current_y:.1f}), movement={movement:.1f}mm, accel_var={accel_variance:.1f}")
+                logger.debug(f"Stall check #{stall_check_count}: pose=({current_x:.1f}, {current_y:.1f}), movement={movement:.1f}mm, accel_xy={accel_xy:.1f}")
 
-            # Stall detection based on odometry
-            # Note: Accelerometer variance doesn't help - motor vibration is similar stuck or moving
-            # The improved cliff detection (requires 2+ sensors on ground) catches edge cases
+            # Stall/collision detection
             is_stalled = False
-            if stall_check_count > 5:
+            if collision_detected:
+                is_stalled = True
+            elif stall_check_count > 5 and movement < 5.0:
                 # Odometry says no movement despite driving
-                if movement < 5.0:
-                    is_stalled = True
-                    logger.info(f"Stall detected (no odometry movement)! movement={movement:.1f}mm")
+                is_stalled = True
+                logger.info(f"Stall detected (no odometry movement)! movement={movement:.1f}mm")
 
             if is_stalled:
                 logger.info("Backing up and turning to escape stall")
@@ -250,7 +248,7 @@ class WanderBehavior(Behavior):
                 stall_check_count = 0
                 last_pose_x = self.robot.pose.x
                 last_pose_y = self.robot.pose.y
-                accel_history.clear()  # Reset accelerometer history
+                last_accel_xy = None  # Reset collision detection
                 continue
 
             stall_check_count += 1
