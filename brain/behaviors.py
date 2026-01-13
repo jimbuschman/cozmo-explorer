@@ -203,8 +203,8 @@ class WanderBehavior(Behavior):
             movement = math.sqrt((current_x - last_pose_x)**2 + (current_y - last_pose_y)**2)
 
             # If we've been driving but haven't moved much, we're probably stuck
-            # Need 6+ checks (~1.8s) with less than 3mm movement to trigger
-            if stall_check_count > 6 and movement < 3.0:  # Less than 3mm movement over ~1.8s
+            # Need 10+ checks (~3s) with less than 2mm movement to trigger
+            if stall_check_count > 10 and movement < 2.0:  # Less than 2mm movement over ~3s
                 logger.info("Stall detected! Backing up and turning")
                 await self.robot.stop()
                 await self.robot.drive(-self.speed, duration=0.7)
@@ -219,7 +219,7 @@ class WanderBehavior(Behavior):
                 continue
 
             stall_check_count += 1
-            if stall_check_count > 8:  # Reset periodically
+            if stall_check_count > 12:  # Reset periodically
                 last_pose_x = current_x
                 last_pose_y = current_y
                 stall_check_count = 0
