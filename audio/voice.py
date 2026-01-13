@@ -149,19 +149,21 @@ class CozmoVoice:
             for i in range(num_chunks):
                 start = i * chunk_samples
                 end = min(start + chunk_samples, len(y))
-                chunk = y[start:end]
+                chunk = y[start:end].copy()  # IMPORTANT: copy to avoid modifying original
 
                 # Skip very quiet chunks
                 if np.abs(chunk).mean() < silence_threshold:
                     continue
 
-                # Add fade in/out to avoid clicks
-                fade_len = int(sr * 0.02)  # 20ms fade
+                # Add fade in/out to avoid clicks (only at chunk boundaries, not speech boundaries)
+                fade_len = int(sr * 0.01)  # 10ms fade - shorter to preserve more audio
                 if len(chunk) > fade_len * 2:
-                    # Fade in at start
-                    chunk[:fade_len] *= np.linspace(0, 1, fade_len)
-                    # Fade out at end
-                    chunk[-fade_len:] *= np.linspace(1, 0, fade_len)
+                    # Only fade in on first chunk
+                    if i == 0:
+                        chunk[:fade_len] *= np.linspace(0, 1, fade_len)
+                    # Only fade out on last chunk
+                    if i == num_chunks - 1:
+                        chunk[-fade_len:] *= np.linspace(1, 0, fade_len)
 
                 # Clip to valid range
                 chunk_clipped = np.clip(chunk, -1.0, 1.0)
