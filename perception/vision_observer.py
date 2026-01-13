@@ -106,6 +106,12 @@ class VisionObserver:
 
     async def _capture_and_analyze(self):
         """Capture an image and analyze it with LLaVA"""
+        # Turn on headlight for better lighting
+        try:
+            await self.robot.set_head_light(True)
+        except Exception as e:
+            logger.debug(f"Could not turn on headlight: {e}")
+
         # Adjust head to look forward before capturing
         try:
             await self.robot.set_head_angle(self.capture_head_angle)
@@ -115,6 +121,13 @@ class VisionObserver:
 
         # Capture image (get both raw and base64)
         raw_image = await self.camera.capture()
+
+        # Turn off headlight after capture
+        try:
+            await self.robot.set_head_light(False)
+        except Exception as e:
+            logger.debug(f"Could not turn off headlight: {e}")
+
         if not raw_image:
             logger.debug("No image captured")
             return

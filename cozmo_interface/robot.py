@@ -325,6 +325,21 @@ class CozmoRobot:
         if pycozmo and self._client:
             self._client.enable_camera(enable=True, color=True)
 
+    # ==================== Lights ====================
+
+    async def set_head_light(self, enable: bool):
+        """
+        Turn Cozmo's head LED (headlight) on or off.
+
+        Args:
+            enable: True to turn on, False to turn off
+        """
+        if pycozmo and self._client:
+            self._client.set_head_light(enable)
+            logger.debug(f"Head light: {'on' if enable else 'off'}")
+        else:
+            logger.debug(f"SIM: head_light={enable}")
+
     # ==================== Display ====================
 
     async def display_text(self, text: str, duration: float = 2.0):
