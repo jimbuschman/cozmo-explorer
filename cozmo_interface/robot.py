@@ -159,6 +159,19 @@ class CozmoRobot:
                     pycozmo.event.EvtRobotStateUpdated,
                     self._on_state_updated
                 )
+
+            # Odometry update event (if available)
+            if hasattr(pycozmo.event, 'EvtRobotOdometryUpdate'):
+                self._client.add_handler(
+                    pycozmo.event.EvtRobotOdometryUpdate,
+                    self._on_odometry_update
+                )
+
+            # Try to enable odometry tracking
+            if hasattr(self._client, 'enable_odometry'):
+                self._client.enable_odometry(enable=True)
+                logger.info("Odometry tracking enabled")
+
         except Exception as e:
             logger.warning(f"Could not set up some event handlers: {e}")
 
@@ -208,17 +221,60 @@ class CozmoRobot:
         except Exception as e:
             logger.debug(f"State update parse error: {e}")
 
+    def _on_robot_poked(self, cli, *args):
+        """Handle robot poked event - useful for debugging pose"""
+        logger.debug(f"Robot poked event: {args}")
+
+    def _on_odometry_update(self, cli, *args):
+        """Handle odometry update from pycozmo"""
+        if args:
+            odom = args[0]
+            try:
+                # Update pose from odometry
+                self._pose.x = getattr(odom, 'x', self._pose.x)
+                self._pose.y = getattr(odom, 'y', self._pose.y)
+                self._pose.angle = getattr(odom, 'angle', getattr(odom, 'rotation', self._pose.angle))
+
+                # Sync to sensors
+                self._sensors.pose_x = self._pose.x
+                self._sensors.pose_y = self._pose.y
+                self._sensors.pose_angle = self._pose.angle
+            except Exception as e:
+                logger.debug(f"Odometry update error: {e}")
+
     def _update_pose_from_client(self):
         """Try to get pose directly from pycozmo client"""
         if self._client:
             try:
-                # pycozmo might track pose on the client object
+                # Try multiple ways to get pose from pycozmo
+                # Method 1: client.pose attribute
                 if hasattr(self._client, 'pose'):
                     pose = self._client.pose
                     if pose:
                         self._pose.x = getattr(pose, 'x', self._pose.x)
                         self._pose.y = getattr(pose, 'y', self._pose.y)
                         self._pose.angle = getattr(pose, 'angle', self._pose.angle)
+                        return
+
+                # Method 2: client._pose attribute (internal)
+                if hasattr(self._client, '_pose'):
+                    pose = self._client._pose
+                    if pose:
+                        self._pose.x = getattr(pose, 'x', self._pose.x)
+                        self._pose.y = getattr(pose, 'y', self._pose.y)
+                        self._pose.angle = getattr(pose, 'angle', self._pose.angle)
+                        return
+
+                # Method 3: Try getting robot state
+                if hasattr(self._client, 'robot_state'):
+                    state = self._client.robot_state
+                    if state:
+                        pose = getattr(state, 'pose', None)
+                        if pose:
+                            self._pose.x = getattr(pose, 'x', self._pose.x)
+                            self._pose.y = getattr(pose, 'y', self._pose.y)
+                            self._pose.angle = getattr(pose, 'angle', self._pose.angle)
+
             except Exception as e:
                 logger.debug(f"Pose update from client failed: {e}")
 
