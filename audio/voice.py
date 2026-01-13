@@ -38,6 +38,7 @@ class CozmoVoice:
         self._engine = None
         self._temp_dir = config.DATA_DIR / "audio_temp"
         self._temp_dir.mkdir(parents=True, exist_ok=True)
+        self._speech_counter = 0  # For unique filenames
 
         # Voice settings
         self.pitch_shift_steps = 4  # Shift pitch up
@@ -132,6 +133,10 @@ class CozmoVoice:
         CHUNK_DURATION = 1.5
         sr = 22050
 
+        # Get unique ID for this speech to avoid overwriting concurrent requests
+        self._speech_counter += 1
+        speech_id = self._speech_counter
+
         try:
             # Load and resample to 22kHz
             y, orig_sr = librosa.load(input_path, sr=sr, mono=True)
@@ -182,8 +187,8 @@ class CozmoVoice:
                 chunk_clipped = np.clip(compressed, -0.98, 0.98)
                 chunk_int16 = (chunk_clipped * 32767).astype(np.int16)
 
-                # Save chunk with part number
-                chunk_path = self._temp_dir / f"cozmo_speech_part{i+1}.wav"
+                # Save chunk with unique speech ID and part number
+                chunk_path = self._temp_dir / f"speech_{speech_id}_part{i+1}.wav"
                 sf.write(str(chunk_path), chunk_int16, sr, subtype='PCM_16')
                 saved_files.append(str(chunk_path))
 
