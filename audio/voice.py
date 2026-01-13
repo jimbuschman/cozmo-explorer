@@ -121,9 +121,21 @@ class CozmoVoice:
         """Convert audio to Cozmo-compatible format (22kHz, 16-bit mono)"""
         output_path = self._temp_dir / "cozmo_speech.wav"
 
+        # Max duration in seconds - pycozmo buffer can't handle long audio
+        MAX_DURATION = 2.0
+
         try:
             # Load and resample to 22kHz
             y, sr = librosa.load(input_path, sr=22050, mono=True)
+
+            # Truncate if too long (pycozmo audio buffer limitation)
+            max_samples = int(MAX_DURATION * sr)
+            if len(y) > max_samples:
+                logger.warning(f"Audio too long ({len(y)/sr:.1f}s), truncating to {MAX_DURATION}s")
+                y = y[:max_samples]
+                # Add fade out to avoid click
+                fade_len = int(sr * 0.05)
+                y[-fade_len:] *= np.linspace(1, 0, fade_len)
 
             # Clip to valid range and add safety margin
             y_clipped = np.clip(y, -1.0, 1.0)
@@ -135,7 +147,7 @@ class CozmoVoice:
             # Save as 16-bit PCM WAV
             sf.write(str(output_path), y_int16, 22050, subtype='PCM_16')
 
-            logger.info(f"Converted audio: {output_path}")
+            logger.info(f"Converted audio: {output_path} ({len(y_int16)/sr:.1f}s)")
             return str(output_path)
         except Exception as e:
             logger.error(f"Cozmo conversion failed: {e}")
