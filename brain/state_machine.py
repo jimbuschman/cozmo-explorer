@@ -7,7 +7,7 @@ Coordinates between behaviors, memory, and LLM guidance.
 import asyncio
 import logging
 from enum import Enum, auto
-from typing import Optional, Callable, Any
+from typing import Optional, Callable, Any, TYPE_CHECKING
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -18,6 +18,11 @@ from brain.behaviors import (
 )
 from brain.memory_context import MemoryContext
 from llm.client import LLMDecision
+
+if TYPE_CHECKING:
+    from brain.learning_coordinator import LearningCoordinator
+    from memory.experience_logger import ExperienceLogger
+    from memory.learned_rules import LearnedRulesStore
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +70,11 @@ class StateMachine:
     3. Execute appropriate behavior for current state
     4. Update memory/context
     5. Occasionally query LLM for guidance
+    6. Periodically run learning analysis
     """
+
+    # Learning configuration
+    LEARNING_INTERVAL_SECONDS = 300  # Run learning every 5 minutes
 
     def __init__(
         self,
@@ -73,7 +82,10 @@ class StateMachine:
         llm_client=None,
         memory=None,
         spatial_map=None,
-        vision_observer=None
+        vision_observer=None,
+        learning_coordinator: "LearningCoordinator" = None,
+        experience_logger: "ExperienceLogger" = None,
+        rules_store: "LearnedRulesStore" = None
     ):
         self.robot = robot
         self.llm_client = llm_client
@@ -81,12 +93,23 @@ class StateMachine:
         self.spatial_map = spatial_map
         self.vision_observer = vision_observer
 
-        self.behaviors = BehaviorFactory(robot)
+        # Learning system components
+        self.learning_coordinator = learning_coordinator
+        self.experience_logger = experience_logger
+        self.rules_store = rules_store
+
+        # Create behavior factory with learning integration
+        self.behaviors = BehaviorFactory(
+            robot,
+            experience_logger=experience_logger,
+            rules_store=rules_store
+        )
         self.state = RobotState.IDLE
         self.context = StateContext()
 
         self._running = False
         self._current_behavior: Optional[Behavior] = None
+        self._last_learning_time: Optional[datetime] = None
 
         # Memory context builder for rich LLM queries
         self.memory_context = MemoryContext(
@@ -159,15 +182,82 @@ class StateMachine:
             if await self._check_safety():
                 continue
 
-            # Check if we need LLM guidance
-            if await self._should_query_llm():
-                await self._query_llm_for_guidance()
+            # Phase 1: LLM observes but doesn't direct
+            # Phase 2+: LLM provides guidance
+            if config.LLM_OBSERVER_MODE:
+                # Phase 1: LLM only observes and journals
+                if await self._should_llm_observe():
+                    # Run observation in background (non-blocking)
+                    asyncio.create_task(self._llm_observe_only())
+            else:
+                # Phase 2+: LLM sets goals
+                if await self._should_query_llm():
+                    await self._query_llm_for_guidance()
+
+            # Check if we should run learning cycle
+            if await self._should_run_learning():
+                await self._run_learning_cycle()
 
             # Execute behavior based on current state
             await self._execute_state()
 
             # Small delay to prevent tight loop
             await asyncio.sleep(0.1)
+
+    async def _should_run_learning(self) -> bool:
+        """Check if it's time to run learning analysis"""
+        if not self.learning_coordinator:
+            return False
+
+        # Don't run during safety-critical states
+        if self.state in (RobotState.STUCK, RobotState.CHARGING, RobotState.ERROR):
+            return False
+
+        # Check interval
+        if self._last_learning_time:
+            elapsed = (datetime.now() - self._last_learning_time).total_seconds()
+            if elapsed < self.LEARNING_INTERVAL_SECONDS:
+                return False
+
+        # Let the coordinator decide based on data availability
+        return self.learning_coordinator.should_run_analysis()
+
+    async def _run_learning_cycle(self):
+        """Run the learning analysis cycle"""
+        if not self.learning_coordinator:
+            return
+
+        logger.info("Running learning analysis cycle")
+
+        try:
+            # Run analysis and get proposals
+            proposals = await self.learning_coordinator.run_analysis_cycle()
+
+            if proposals:
+                logger.info(f"Learning cycle proposed {len(proposals)} new rules")
+                for rule in proposals:
+                    logger.info(f"  - {rule.name}: {rule.description}")
+
+            # Check and validate any rules that have been tested enough
+            testing_rules = self.learning_coordinator.get_testing_rules()
+            for rule_info in testing_rules:
+                if rule_info['tests'] >= self.learning_coordinator.MIN_SAMPLES_FOR_VALIDATION:
+                    result = await self.learning_coordinator.validate_proposal(rule_info['rule_id'])
+                    if result:
+                        if result.passed:
+                            logger.info(f"Rule {rule_info['name']} validated: {result.details}")
+                        else:
+                            logger.info(f"Rule {rule_info['name']} rejected: {result.details}")
+
+            # Activate any newly validated rules
+            activated = self.learning_coordinator.activate_validated_rules()
+            if activated:
+                logger.info(f"Activated {len(activated)} learned rules")
+
+            self._last_learning_time = datetime.now()
+
+        except Exception as e:
+            logger.error(f"Learning cycle failed: {e}")
 
     async def _check_safety(self) -> bool:
         """
@@ -207,7 +297,11 @@ class StateMachine:
         return False
 
     async def _should_query_llm(self) -> bool:
-        """Determine if we should ask the LLM for guidance"""
+        """Determine if we should ask the LLM for guidance (Phase 2+)"""
+        # Phase 1: LLM doesn't set goals, only observes
+        if not config.LLM_GOAL_SETTING_ENABLED:
+            return False
+
         if self.llm_client is None:
             return False
 
@@ -225,6 +319,77 @@ class StateMachine:
 
         elapsed = (datetime.now() - self.context.last_llm_query).total_seconds()
         return elapsed > self.llm_query_interval
+
+    async def _should_llm_observe(self) -> bool:
+        """Check if LLM should make an observation (Phase 1 only)"""
+        if not config.LLM_OBSERVER_MODE:
+            return False
+
+        if self.llm_client is None:
+            return False
+
+        # Less frequent than goal-setting
+        if self.context.last_llm_query is None:
+            return True
+
+        elapsed = (datetime.now() - self.context.last_llm_query).total_seconds()
+        return elapsed > config.LLM_OBSERVER_INTERVAL
+
+    async def _llm_observe_only(self):
+        """
+        Let LLM observe and journal without setting goals (Phase 1).
+
+        The LLM acts as a passive observer, noting interesting patterns
+        and journaling observations, but doesn't direct the robot's actions.
+        """
+        if self.llm_client is None:
+            return
+
+        try:
+            # Build simple context for observation
+            observation_prompt = f"""You are observing a robot learning to survive and navigate.
+Do NOT give commands or set goals. Simply observe and note anything interesting.
+
+Current state: {self.state.name}
+Exploration time: {self.context.exploration_time:.1f}s
+Stuck count: {self.context.stuck_count}
+Position: ({self.robot.pose.x:.0f}, {self.robot.pose.y:.0f})
+Battery: {self.robot.sensors.battery_voltage:.2f}V
+
+External sensors connected: {self.robot.sensors.ext_connected}
+"""
+            if self.robot.sensors.ext_connected:
+                dists = self.robot.sensors.get_obstacle_distances()
+                observation_prompt += f"""Front distance: {dists['front']}mm
+Left distance: {dists['left']}mm
+Right distance: {dists['right']}mm
+"""
+
+            observation_prompt += """
+Write a brief journal observation (1-2 sentences). Focus on:
+- What the robot seems to be learning
+- Any patterns you notice
+- Interesting sensor readings or behaviors
+
+Respond with just the observation text, no commands or suggestions."""
+
+            # Get observation from LLM
+            observation = await self.llm_client._chat(observation_prompt)
+
+            if observation:
+                observation = observation.strip()
+                logger.debug(f"LLM observation: {observation[:100]}...")
+
+                # Log to journal if memory context available
+                if self.memory_context:
+                    self.memory_context.add_observation(
+                        f"[Observer] {observation}"
+                    )
+
+            self.context.last_llm_query = datetime.now()
+
+        except Exception as e:
+            logger.debug(f"LLM observation failed: {e}")
 
     async def _query_llm_for_guidance(self):
         """Ask the LLM what to do next using rich memory context"""
@@ -401,9 +566,11 @@ class StateMachine:
         await asyncio.sleep(1.0)
 
         # If no goal, set default explore goal
+        # In Phase 1, always explore - don't wait for LLM
         if self.context.current_goal is None:
+            goal_desc = "Explore and learn survival rules" if config.PHASE1_PURE_SURVIVAL else "Explore the environment"
             self.set_goal(Goal(
-                description="Explore the environment",
+                description=goal_desc,
                 goal_type="explore"
             ))
             await self._change_state(RobotState.EXPLORING)

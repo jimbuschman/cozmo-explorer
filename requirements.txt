@@ -24,3 +24,6 @@ asyncio-mqtt>=0.16.0  # Optional: for future multi-robot
 
 # Utilities
 python-dotenv>=1.0.0
+
+# External sensors (ESP32 pod)
+pyserial>=3.5

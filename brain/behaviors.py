@@ -8,11 +8,18 @@ import asyncio
 import random
 import math
 import logging
-from typing import Optional, AsyncGenerator
+from typing import Optional, AsyncGenerator, TYPE_CHECKING
 from dataclasses import dataclass
 from enum import Enum, auto
+from datetime import datetime
+from pathlib import Path
 
+import config
 from cozmo_interface.robot import CozmoRobot, RobotPose
+
+if TYPE_CHECKING:
+    from memory.experience_logger import ExperienceLogger
+    from memory.learned_rules import LearnedRulesStore
 
 logger = logging.getLogger(__name__)
 
@@ -147,26 +154,48 @@ class TurnAngleBehavior(Behavior):
 
 class WanderBehavior(Behavior):
     """
-    Random wandering exploration.
+    Random wandering exploration with proactive obstacle avoidance.
 
-    Drives forward, occasionally turns randomly, avoids cliffs.
+    Uses external distance sensors (if available) for proactive avoidance,
+    falls back to reactive collision detection if not.
+
+    Optionally integrates with the learning system to:
+    - Log sensor data, actions, and outcomes
+    - Apply learned rules to modify recovery behavior
     """
+
+    # Distance thresholds (mm)
+    DANGER_DISTANCE = 80      # Emergency stop
+    SLOW_DISTANCE = 150       # Slow down
+    CAUTION_DISTANCE = 250    # Start looking for alternatives
+
+    # Default recovery angles
+    DEFAULT_STALL_ANGLES = [-120, -90, 90, 120]
+    DEFAULT_CLIFF_ANGLES = [-90, -135, 90, 135]
 
     def __init__(
         self,
         robot: CozmoRobot,
         duration: float = 30.0,
         speed: float = 50.0,
-        turn_probability: float = 0.1
+        turn_probability: float = 0.1,
+        experience_logger: "ExperienceLogger" = None,
+        rules_store: "LearnedRulesStore" = None
     ):
         super().__init__(robot)
         self.duration = duration
         self.speed = speed
         self.turn_probability = turn_probability
+        self.experience_logger = experience_logger
+        self.rules_store = rules_store
+
+        # Track current action for outcome logging
+        self._current_action_id: Optional[int] = None
+        self._current_action_type: Optional[str] = None
 
     async def run(self) -> BehaviorResult:
         elapsed = 0.0
-        check_interval = 0.3
+        check_interval = 0.15  # Faster checks for obstacle response
         distance_traveled = 0.0
         turns_made = 0
         stall_check_count = 0
@@ -174,80 +203,105 @@ class WanderBehavior(Behavior):
         last_pose_y = self.robot.pose.y
 
         logger.info(f"Starting wander for {self.duration}s")
+        has_distance_sensors = self.robot.sensors.ext_connected
 
         while elapsed < self.duration and not self.is_cancelled:
-            # Check sensors
-            if self.robot.sensors.cliff_detected:
+            sensors = self.robot.sensors
+
+            # === SAFETY CHECKS ===
+            if sensors.cliff_detected:
                 logger.info("Cliff detected, backing up and turning")
-                await self.robot.stop()
-                await self.robot.drive(-self.speed, duration=0.5)
-                await asyncio.sleep(0.5)
-                turn_angle = random.choice([-90, -135, 90, 135])
-                await self.robot.turn(turn_angle)
+                await self._escape_cliff()
                 turns_made += 1
                 elapsed += 1.5
-                last_pose_x = self.robot.pose.x
-                last_pose_y = self.robot.pose.y
+                last_pose_x, last_pose_y = self.robot.pose.x, self.robot.pose.y
                 continue
 
-            if self.robot.sensors.is_picked_up:
+            if sensors.is_picked_up:
                 await self.robot.stop()
-                return BehaviorResult(
-                    BehaviorStatus.INTERRUPTED,
-                    "Robot picked up"
-                )
+                return BehaviorResult(BehaviorStatus.INTERRUPTED, "Robot picked up")
 
-            # Stall detection - check if we're actually moving
-            current_x = self.robot.pose.x
-            current_y = self.robot.pose.y
+            # Check tilt from external IMU
+            if has_distance_sensors and (abs(sensors.ext_pitch) > 20 or abs(sensors.ext_roll) > 20):
+                logger.warning(f"Tilt detected: pitch={sensors.ext_pitch:.1f}° roll={sensors.ext_roll:.1f}°")
+                await self.robot.stop()
+                await asyncio.sleep(0.5)
+                continue
+
+            # === PROACTIVE OBSTACLE AVOIDANCE ===
+            if has_distance_sensors:
+                front_dist = sensors.get_front_obstacle_distance()
+                left_dist = sensors.ext_ultra_l_mm
+                right_dist = sensors.ext_ultra_r_mm
+
+                # Emergency stop
+                if 0 < front_dist < self.DANGER_DISTANCE:
+                    logger.warning(f"Obstacle at {front_dist}mm, emergency reverse")
+                    await self.robot.stop()
+                    await self.robot.drive(-self.speed, duration=0.5)
+                    await asyncio.sleep(0.5)
+                    turn_angle = self._pick_turn_direction(left_dist, right_dist, 90)
+                    await self.robot.turn(turn_angle)
+                    turns_made += 1
+                    elapsed += 1.5
+                    last_pose_x, last_pose_y = self.robot.pose.x, self.robot.pose.y
+                    continue
+
+                # Caution zone - turn away
+                if 0 < front_dist < self.CAUTION_DISTANCE:
+                    turn_angle = self._pick_turn_direction(left_dist, right_dist, 45)
+                    logger.info(f"Obstacle at {front_dist}mm, turning {turn_angle}°")
+                    await self.robot.stop()
+                    await self.robot.turn(turn_angle)
+                    turns_made += 1
+                    elapsed += abs(turn_angle) / 45
+                    continue
+
+                # Speed adjustment
+                current_speed = self.speed * 0.5 if 0 < front_dist < self.SLOW_DISTANCE else self.speed
+            else:
+                current_speed = self.speed
+
+            # === REACTIVE COLLISION DETECTION (fallback) ===
+            current_x, current_y = self.robot.pose.x, self.robot.pose.y
             movement = math.sqrt((current_x - last_pose_x)**2 + (current_y - last_pose_y)**2)
 
-            # Check for collision (detected at packet level for fast response)
-            # or stall (odometry shows no movement)
             is_stalled = False
-            if self.robot.sensors.collision_detected:
+            if sensors.collision_detected:
                 is_stalled = True
-                logger.info("Collision detected - backing up")
-                self.robot.sensors.collision_detected = False  # Clear flag
+                logger.info("Collision detected")
+                sensors.collision_detected = False
             elif stall_check_count > 5 and movement < 5.0:
                 is_stalled = True
-                logger.info(f"Stall detected (no odometry movement)! movement={movement:.1f}mm")
+                logger.info(f"Stall detected, movement={movement:.1f}mm")
 
             if is_stalled:
-                logger.info("Backing up and turning to escape stall")
-                await self.robot.stop()
-                await self.robot.drive(-self.speed, duration=0.7)
-                await asyncio.sleep(0.7)
-                turn_angle = random.choice([-120, -90, 90, 120])
-                await self.robot.turn(turn_angle)
+                await self._escape_stall()
                 turns_made += 1
                 elapsed += 1.5
                 stall_check_count = 0
-                last_pose_x = self.robot.pose.x
-                last_pose_y = self.robot.pose.y
+                last_pose_x, last_pose_y = self.robot.pose.x, self.robot.pose.y
                 continue
 
             stall_check_count += 1
-            if stall_check_count > 8:  # Reset periodically
-                last_pose_x = current_x
-                last_pose_y = current_y
+            if stall_check_count > 8:
+                last_pose_x, last_pose_y = current_x, current_y
                 stall_check_count = 0
 
-            # Random turn decision
+            # === RANDOM EXPLORATION ===
             if random.random() < self.turn_probability:
                 await self.robot.stop()
                 turn_angle = random.uniform(-60, 60)
                 await self.robot.turn(turn_angle)
                 turns_made += 1
-                elapsed += abs(turn_angle) / 45  # rough estimate
-                last_pose_x = self.robot.pose.x
-                last_pose_y = self.robot.pose.y
+                elapsed += abs(turn_angle) / 45
+                last_pose_x, last_pose_y = self.robot.pose.x, self.robot.pose.y
                 stall_check_count = 0
 
-            # Drive forward
-            await self.robot.drive(self.speed)
+            # === DRIVE ===
+            await self.robot.drive(current_speed)
             await asyncio.sleep(check_interval)
-            distance_traveled += self.speed * check_interval
+            distance_traveled += current_speed * check_interval
             elapsed += check_interval
 
         await self.robot.stop()
@@ -255,12 +309,233 @@ class WanderBehavior(Behavior):
         return BehaviorResult(
             BehaviorStatus.COMPLETED if not self.is_cancelled else BehaviorStatus.INTERRUPTED,
             f"Wandered for {elapsed:.1f}s",
-            {
-                "duration": elapsed,
-                "distance_estimate": distance_traveled,
-                "turns": turns_made
-            }
+            {"duration": elapsed, "distance_estimate": distance_traveled, "turns": turns_made}
         )
+
+    def _pick_turn_direction(self, left_dist: int, right_dist: int, magnitude: int = 90) -> int:
+        """Pick turn direction based on clearance."""
+        if left_dist <= 0 and right_dist <= 0:
+            return random.choice([-magnitude, magnitude])
+        if left_dist <= 0:
+            return -magnitude
+        if right_dist <= 0:
+            return magnitude
+        return magnitude if left_dist > right_dist else -magnitude
+
+    async def _escape_cliff(self):
+        """Escape from cliff detection - back up and turn away"""
+        # Capture image before action (what did we encounter?)
+        before_image_path = None
+        if self.experience_logger:
+            before_image_path = await self._capture_action_image("escape_cliff", "before")
+
+        # Log sensor snapshot before action
+        snapshot_id = None
+        if self.experience_logger:
+            snapshot_id = self.experience_logger.log_sensor_snapshot_from_robot(
+                self.robot, image_path=before_image_path
+            )
+
+        # Get sensor context for rule matching
+        sensor_context = self._get_sensor_context()
+
+        # Determine turn angles - apply learned rules if available
+        base_action = {"angles": self.DEFAULT_CLIFF_ANGLES, "backup_duration": 0.5}
+        applied_rule_id = None
+        if self.rules_store:
+            modified_action, applied_rule_id = self.rules_store.apply_rules_to_action(base_action, sensor_context)
+            angles = modified_action.get("angles", self.DEFAULT_CLIFF_ANGLES)
+            backup_duration = modified_action.get("backup_duration", 0.5)
+        else:
+            angles = self.DEFAULT_CLIFF_ANGLES
+            backup_duration = 0.5
+
+        # Choose angle
+        angle = random.choice(angles)
+
+        # Log action
+        action_id = None
+        if self.experience_logger:
+            action_id = self.experience_logger.log_action(
+                action_type="escape_cliff",
+                parameters={"angle": angle, "backup_duration": backup_duration, "rule_id": applied_rule_id},
+                trigger="cliff",
+                context_snapshot_id=snapshot_id
+            )
+            self._current_action_id = action_id
+            self._current_action_type = "escape_cliff"
+
+        # Execute the escape maneuver
+        await self.robot.stop()
+        await self.robot.drive(-self.speed, duration=backup_duration)
+        await asyncio.sleep(backup_duration)
+        await self.robot.turn(angle)
+
+        # Log outcome (assume success if we get here without another cliff)
+        if self.experience_logger and action_id:
+            # Capture image after action (what do we see now?)
+            after_image_path = await self._capture_action_image("escape_cliff", "after")
+
+            post_snapshot_id = self.experience_logger.log_sensor_snapshot_from_robot(
+                self.robot, image_path=after_image_path
+            )
+            outcome_type = "cliff" if self.robot.sensors.cliff_detected else "success"
+            self.experience_logger.log_outcome(
+                action_event_id=action_id,
+                outcome_type=outcome_type,
+                details={
+                    "post_cliff_detected": self.robot.sensors.cliff_detected,
+                    "before_image": before_image_path,
+                    "after_image": after_image_path
+                },
+                sensor_snapshot_id=post_snapshot_id
+            )
+
+            # Record rule performance for conflict resolution
+            if self.rules_store and applied_rule_id:
+                self.rules_store.record_rule_application(applied_rule_id, outcome_type == "success")
+
+            self._current_action_id = None
+            self._current_action_type = None
+
+    async def _escape_stall(self):
+        """Escape from stall/collision - back up and turn away"""
+        # Capture image before action (what did we hit?)
+        before_image_path = None
+        if self.experience_logger:
+            before_image_path = await self._capture_action_image("escape_stall", "before")
+
+        # Log sensor snapshot before action
+        snapshot_id = None
+        if self.experience_logger:
+            snapshot_id = self.experience_logger.log_sensor_snapshot_from_robot(
+                self.robot, image_path=before_image_path
+            )
+
+        # Get sensor context for rule matching
+        sensor_context = self._get_sensor_context()
+
+        # Determine turn angles - apply learned rules if available
+        base_action = {"angles": self.DEFAULT_STALL_ANGLES, "backup_duration": 0.7}
+        applied_rule_id = None
+        if self.rules_store:
+            modified_action, applied_rule_id = self.rules_store.apply_rules_to_action(base_action, sensor_context)
+            angles = modified_action.get("angles", self.DEFAULT_STALL_ANGLES)
+            backup_duration = modified_action.get("backup_duration", 0.7)
+        else:
+            angles = self.DEFAULT_STALL_ANGLES
+            backup_duration = 0.7
+
+        # Choose angle
+        angle = random.choice(angles)
+
+        # Log action
+        action_id = None
+        if self.experience_logger:
+            action_id = self.experience_logger.log_action(
+                action_type="escape_stall",
+                parameters={"angle": angle, "backup_duration": backup_duration, "rule_id": applied_rule_id},
+                trigger="collision" if self.robot.sensors.collision_detected else "stall",
+                context_snapshot_id=snapshot_id
+            )
+            self._current_action_id = action_id
+            self._current_action_type = "escape_stall"
+
+        # Execute the escape maneuver
+        await self.robot.stop()
+        await self.robot.drive(-self.speed, duration=backup_duration)
+        await asyncio.sleep(backup_duration)
+        await self.robot.turn(angle)
+
+        # Log outcome - check if we're still stuck after the maneuver
+        if self.experience_logger and action_id:
+            # Brief pause to check result
+            await asyncio.sleep(0.2)
+
+            # Capture image after action (what do we see now?)
+            after_image_path = await self._capture_action_image("escape_stall", "after")
+
+            post_snapshot_id = self.experience_logger.log_sensor_snapshot_from_robot(
+                self.robot, image_path=after_image_path
+            )
+
+            # Determine outcome based on sensors
+            if self.robot.sensors.collision_detected:
+                outcome_type = "collision"
+            elif self.robot.sensors.cliff_detected:
+                outcome_type = "cliff"
+            else:
+                outcome_type = "success"
+
+            self.experience_logger.log_outcome(
+                action_event_id=action_id,
+                outcome_type=outcome_type,
+                details={
+                    "angle_used": angle,
+                    "backup_duration": backup_duration,
+                    "before_image": before_image_path,
+                    "after_image": after_image_path
+                },
+                sensor_snapshot_id=post_snapshot_id
+            )
+
+            # Record rule performance for conflict resolution
+            if self.rules_store and applied_rule_id:
+                self.rules_store.record_rule_application(applied_rule_id, outcome_type == "success")
+
+            self._current_action_id = None
+            self._current_action_type = None
+
+    def _get_sensor_context(self) -> dict:
+        """Get current sensor values as a dict for rule matching"""
+        sensors = self.robot.sensors
+        return {
+            "ext_ultra_l_mm": sensors.ext_ultra_l_mm,
+            "ext_ultra_c_mm": sensors.ext_ultra_c_mm,
+            "ext_ultra_r_mm": sensors.ext_ultra_r_mm,
+            "ext_tof_mm": sensors.ext_tof_mm,
+            "ext_pitch": sensors.ext_pitch,
+            "ext_roll": sensors.ext_roll,
+            "ext_yaw": sensors.ext_yaw,
+            "cliff_detected": sensors.cliff_detected,
+            "is_picked_up": sensors.is_picked_up,
+            "battery_voltage": sensors.battery_voltage
+        }
+
+    async def _capture_action_image(self, action_type: str, phase: str) -> Optional[str]:
+        """
+        Capture an image during an action for learning data.
+
+        Args:
+            action_type: Type of action (e.g., "escape_stall", "escape_cliff")
+            phase: "before" or "after"
+
+        Returns:
+            Path to saved image, or None if capture failed
+        """
+        try:
+            image = await self.robot.capture_image()
+            if image is None:
+                return None
+
+            # Create images directory for learning data
+            images_dir = config.DATA_DIR / "learning_images"
+            images_dir.mkdir(parents=True, exist_ok=True)
+
+            # Generate filename with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            filename = f"{action_type}_{phase}_{timestamp}.jpg"
+            filepath = images_dir / filename
+
+            # Save image
+            image.save(str(filepath), "JPEG", quality=85)
+            logger.debug(f"Captured {phase} image for {action_type}: {filename}")
+
+            return str(filepath)
+
+        except Exception as e:
+            logger.debug(f"Failed to capture action image: {e}")
+            return None
 
 
 class LookAroundBehavior(Behavior):
@@ -443,8 +718,15 @@ class AvoidObstacleBehavior(Behavior):
 class BehaviorFactory:
     """Factory for creating behaviors with consistent robot reference"""
 
-    def __init__(self, robot: CozmoRobot):
+    def __init__(
+        self,
+        robot: CozmoRobot,
+        experience_logger: "ExperienceLogger" = None,
+        rules_store: "LearnedRulesStore" = None
+    ):
         self.robot = robot
+        self.experience_logger = experience_logger
+        self.rules_store = rules_store
 
     def stop(self) -> StopBehavior:
         return StopBehavior(self.robot)
@@ -460,7 +742,13 @@ class BehaviorFactory:
         duration: float = 30.0,
         speed: float = 50.0
     ) -> WanderBehavior:
-        return WanderBehavior(self.robot, duration, speed)
+        return WanderBehavior(
+            self.robot,
+            duration,
+            speed,
+            experience_logger=self.experience_logger,
+            rules_store=self.rules_store
+        )
 
     def look_around(self, capture_images: bool = True) -> LookAroundBehavior:
         return LookAroundBehavior(self.robot, capture_images)

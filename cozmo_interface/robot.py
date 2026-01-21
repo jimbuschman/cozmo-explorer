@@ -50,6 +50,36 @@ class SensorData:
     pose_x: float = 0.0  # mm from start
     pose_y: float = 0.0  # mm from start
     pose_angle: float = 0.0  # radians
+    # External sensor pod (ESP32)
+    ext_tof_mm: int = -1
+    ext_ultra_l_mm: int = -1
+    ext_ultra_c_mm: int = -1
+    ext_ultra_r_mm: int = -1
+    ext_pitch: float = 0.0
+    ext_roll: float = 0.0
+    ext_yaw: float = 0.0
+    # External IMU raw values
+    ext_ax_g: float = 0.0  # Accelerometer X (g's)
+    ext_ay_g: float = 0.0  # Accelerometer Y (g's)
+    ext_az_g: float = 0.0  # Accelerometer Z (g's)
+    ext_gx_dps: float = 0.0  # Gyroscope X (degrees/sec)
+    ext_gy_dps: float = 0.0  # Gyroscope Y (degrees/sec)
+    ext_gz_dps: float = 0.0  # Gyroscope Z (degrees/sec)
+    ext_ts_ms: int = 0  # ESP32 timestamp
+    ext_connected: bool = False
+
+    def get_front_obstacle_distance(self) -> int:
+        """Get closest obstacle distance from forward-facing sensors."""
+        distances = [d for d in [self.ext_tof_mm, self.ext_ultra_c_mm] if d > 0]
+        return min(distances) if distances else -1
+
+    def get_obstacle_distances(self) -> dict:
+        """Get all obstacle distances."""
+        return {
+            "front": self.get_front_obstacle_distance(),
+            "left": self.ext_ultra_l_mm,
+            "right": self.ext_ultra_r_mm,
+        }
 
 
 @dataclass

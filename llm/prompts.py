@@ -147,3 +147,67 @@ Key observations:
 
 Write a 2-3 sentence summary of what was discovered and learned.
 """
+
+
+# Prompt for learning system - analyzing experiences and proposing behavioral rules
+LEARNING_ANALYSIS_PROMPT = """You are analyzing Cozmo's exploration experiences to propose behavioral improvements.
+
+PERFORMANCE DATA:
+{analysis_report}
+
+Your task is to analyze this data and propose rules that could improve Cozmo's navigation.
+
+CONSTRAINTS (rules MUST follow these):
+- Rules must NOT disable safety features (cliff detection, pickup detection)
+- Speed: 10-100 mm/s
+- Turn angles: -180 to 180 degrees
+- Backup duration: 0.3-2.0 seconds
+- Rules should be based on evidence in the data, not assumptions
+
+SENSOR NAMES (use exactly these in conditions):
+- ext_ultra_l_mm: Left ultrasonic distance (mm)
+- ext_ultra_c_mm: Center ultrasonic distance (mm)
+- ext_ultra_r_mm: Right ultrasonic distance (mm)
+- ext_tof_mm: Time-of-flight front distance (mm)
+- ext_pitch: Pitch angle (degrees)
+- ext_roll: Roll angle (degrees)
+
+CONDITION OPERATORS:
+- "<", ">", "<=", ">=", "==", "between"
+
+ACTION MODIFIERS (what rules can change):
+- turn_angle_preference: list of preferred turn angles, e.g., [-90, -120]
+- remove_angles: list of angles to avoid, e.g., [90, 120]
+- backup_duration: seconds to back up (0.3-2.0)
+- speed_multiplier: multiply speed by this (0.3-2.0)
+
+RESPONSE FORMAT (must be valid JSON):
+{{
+    "analysis": "Brief summary of what patterns you found in the data",
+    "proposals": [
+        {{
+            "name": "descriptive_rule_name",
+            "description": "What this rule does and why",
+            "conditions": [
+                {{"sensor": "ext_ultra_r_mm", "op": "<", "value": 150}}
+            ],
+            "action_modifier": {{
+                "turn_angle_preference": [-90, -120]
+            }},
+            "evidence": "What data supports this rule"
+        }}
+    ]
+}}
+
+If the data doesn't support any new rules, return:
+{{
+    "analysis": "Summary of findings",
+    "proposals": []
+}}
+
+Important:
+- Only propose rules if the data clearly supports them
+- Each rule needs at least one condition and one action modifier
+- Prefer simple rules with clear conditions
+- Base recommendations on the success/failure rates in the data
+"""
