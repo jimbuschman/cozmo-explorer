@@ -161,9 +161,23 @@ class CozmoExplorer:
         logger.info("Robot connected!")
 
         # Connect external sensors (ESP32 pod)
+        ext_mode = os.environ.get("EXT_SENSOR_MODE", config.EXT_SENSOR_MODE)
         ext_port = os.environ.get("EXT_SENSOR_PORT", config.EXT_SENSOR_PORT)
-        logger.info(f"Connecting external sensors on {ext_port}...")
-        self.external_sensors = ExternalSensorReader(port=ext_port, baud=config.EXT_SENSOR_BAUD)
+        ext_udp_port = int(os.environ.get("EXT_SENSOR_UDP_PORT", config.EXT_SENSOR_UDP_PORT))
+
+        if ext_mode == "udp":
+            logger.info(f"Connecting external sensors via WiFi UDP (port {ext_udp_port})...")
+            self.external_sensors = ExternalSensorReader(
+                mode="udp",
+                udp_port=ext_udp_port
+            )
+        else:
+            logger.info(f"Connecting external sensors via serial ({ext_port})...")
+            self.external_sensors = ExternalSensorReader(
+                mode="serial",
+                port=ext_port,
+                baud=config.EXT_SENSOR_BAUD
+            )
 
         if self.external_sensors.start():
             logger.info("External sensors connected!")

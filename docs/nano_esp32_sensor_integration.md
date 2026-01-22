@@ -5,8 +5,48 @@ This document describes the wiring and code for connecting:
 - **Arduino Nano** (3x ultrasonic sensors)
 - **ESP32-S3** (VL53L0X ToF sensor + MPU6050 IMU)
 - **Serial communication between Nano and ESP32**
+- **WiFi UDP communication from ESP32 to PC** (wireless mode)
 
-The ESP32 collects data from its ToF sensor, IMU, and the Nano, then outputs a single JSON line per reading with a timestamp.
+The ESP32 collects data from its ToF sensor, IMU, and the Nano, then outputs a single JSON line per reading via:
+1. USB Serial (for debugging/tethered mode)
+2. WiFi UDP (for wireless operation)
+
+---
+
+## Network Topology
+
+### Tethered Mode (Serial)
+```
+┌─────────────┐  USB   ┌─────────────┐  UART  ┌─────────────┐
+│     PC      │◄──────►│    ESP32    │◄──────►│    Nano     │
+│  (Python)   │ Serial │  ToF + IMU  │        │ Ultrasonics │
+└─────────────┘        └─────────────┘        └─────────────┘
+```
+
+### Wireless Mode (WiFi UDP)
+```
+                         Home WiFi Network
+                               │
+         ┌─────────────────────┼─────────────────────┐
+         │                     │                     │
+         ▼                     ▼                     ▼
+┌─────────────────┐    ┌─────────────┐       ┌─────────────┐
+│       PC        │    │    ESP32    │ UART  │    Nano     │
+│  Built-in WiFi  │    │  ToF + IMU  │◄─────►│ Ultrasonics │
+│  (Python UDP)   │    │    WiFi     │       │             │
+└────────┬────────┘    └──────┬──────┘       └─────────────┘
+         │                    │
+         │    USB WiFi        │
+         ▼    Adapter         │
+┌─────────────────┐           │
+│  Cozmo's WiFi   │◄──────────┘ (ESP32 sends UDP to PC)
+│  192.168.1.1    │
+└─────────────────┘
+```
+
+**Note:** In wireless mode, your PC needs two WiFi connections:
+- Built-in WiFi → Home network (for ESP32 data + internet)
+- USB WiFi adapter → Cozmo's network (for robot control)
 
 ---
 
@@ -81,7 +121,9 @@ The ESP32 outputs a single JSON object per reading:
 
 ---
 
-## Nano Code (Ultrasonic + JSON Output)
+## Nano Code
+
+File: `sensors/NanoSensorsCozmo.cpp`
 
 ```cpp
 // Arduino Nano - 3x Ultrasonic Sensor Reader
@@ -158,24 +200,46 @@ void loop() {
 
 ---
 
-## ESP32 Code (ToF + MPU6050 + Nano + Combined JSON Output)
+## ESP32 Code
+
+File: `sensors/esp32Cozmo.cpp`
 
 ```cpp
+// ESP32 Sensor Pod - VL53L0X ToF + MPU6050 IMU + Nano Ultrasonics
+// Outputs JSON via:
+//   1. USB Serial (for debugging/tethered mode)
+//   2. WiFi UDP (for wireless operation)
+
 #include <Wire.h>
+#include <WiFi.h>
+#include <WiFiUdp.h>
 #include <Adafruit_VL53L0X.h>
 #include <MPU6050.h>
+
+// =============================================================================
+// CONFIGURATION - Edit these for your setup
+// =============================================================================
+const char* WIFI_SSID = "YOUR_WIFI_SSID";      // Your home WiFi network name
+const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";  // Your home WiFi password
+const char* PC_IP = "192.168.1.50";            // Your PC's IP on the network
+const int UDP_PORT = 5000;                      // UDP port to send to
+
+const bool ENABLE_WIFI = true;   // Set false to disable WiFi (serial only)
+const bool ENABLE_SERIAL = true; // Set false to disable serial output
+// =============================================================================
 
 Adafruit_VL53L0X lox;
 MPU6050 mpu;
 HardwareSerial NanoSerial(1);
+WiFiUDP udp;
 
 // --- Calibration & filtering ---
 float gyroBiasX = 0, gyroBiasY = 0, gyroBiasZ = 0;
-
 float pitch = 0, roll = 0, yaw = 0;
 unsigned long lastTime = 0;
-
 const float alpha = 0.98;  // complementary filter constant
+
+bool wifiConnected = false;
 
 void setup() {
   Serial.begin(115200);
@@ -198,9 +262,39 @@ void setup() {
   // UART to Nano
   NanoSerial.begin(9600, SERIAL_8N1, 16, 17);
 
+  // WiFi setup
+  if (ENABLE_WIFI) {
+    Serial.print("Connecting to WiFi: ");
+    Serial.println(WIFI_SSID);
+
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+      delay(500);
+      Serial.print(".");
+      attempts++;
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+      wifiConnected = true;
+      Serial.println();
+      Serial.print("WiFi connected! IP: ");
+      Serial.println(WiFi.localIP());
+      Serial.print("Sending UDP to: ");
+      Serial.print(PC_IP);
+      Serial.print(":");
+      Serial.println(UDP_PORT);
+    } else {
+      Serial.println();
+      Serial.println("WiFi connection failed - continuing with serial only");
+    }
+  }
+
   Serial.println("ESP32 Ready");
 
   // --- Calibrate gyro bias (simple average) ---
+  Serial.println("Calibrating gyro - keep device still...");
   const int samples = 200;
   long gxSum = 0, gySum = 0, gzSum = 0;
   int16_t ax, ay, az, gx, gy, gz;
@@ -216,6 +310,7 @@ void setup() {
   gyroBiasX = gxSum / (float)samples;
   gyroBiasY = gySum / (float)samples;
   gyroBiasZ = gzSum / (float)samples;
+  Serial.println("Calibration complete");
 
   lastTime = millis();
 }
@@ -289,34 +384,43 @@ void loop() {
     }
   }
 
-  // Build final JSON with timestamp
-  unsigned long ts = millis();
+  // Build JSON string
+  String json = "{\"ts_ms\":";
+  json += millis();
+  json += ",\"tof_mm\":";
+  json += tofDist;
 
-  Serial.print("{\"ts_ms\":");
-  Serial.print(ts);
-  Serial.print(",\"tof_mm\":");
-  Serial.print(tofDist);
+  json += ",\"mpu\":{";
+  json += "\"ax_g\":"; json += String(ax_g, 3);
+  json += ",\"ay_g\":"; json += String(ay_g, 3);
+  json += ",\"az_g\":"; json += String(az_g, 3);
+  json += ",\"gx_dps\":"; json += String(gx_dps, 3);
+  json += ",\"gy_dps\":"; json += String(gy_dps, 3);
+  json += ",\"gz_dps\":"; json += String(gz_dps, 3);
+  json += ",\"pitch\":"; json += String(pitch, 3);
+  json += ",\"roll\":"; json += String(roll, 3);
+  json += ",\"yaw\":"; json += String(yaw, 3);
+  json += "}";
 
-  Serial.print(",\"mpu\":{");
-  Serial.print("\"ax_g\":"); Serial.print(ax_g, 3);
-  Serial.print(",\"ay_g\":"); Serial.print(ay_g, 3);
-  Serial.print(",\"az_g\":"); Serial.print(az_g, 3);
-  Serial.print(",\"gx_dps\":"); Serial.print(gx_dps, 3);
-  Serial.print(",\"gy_dps\":"); Serial.print(gy_dps, 3);
-  Serial.print(",\"gz_dps\":"); Serial.print(gz_dps, 3);
-  Serial.print(",\"pitch\":"); Serial.print(pitch, 3);
-  Serial.print(",\"roll\":"); Serial.print(roll, 3);
-  Serial.print(",\"yaw\":"); Serial.print(yaw, 3);
-  Serial.print("}");
+  json += ",\"ultra_l_mm\":";
+  json += L;
+  json += ",\"ultra_c_mm\":";
+  json += C;
+  json += ",\"ultra_r_mm\":";
+  json += R;
+  json += "}";
 
-  Serial.print(",\"ultra_l_mm\":");
-  Serial.print(L);
-  Serial.print(",\"ultra_c_mm\":");
-  Serial.print(C);
-  Serial.print(",\"ultra_r_mm\":");
-  Serial.print(R);
+  // Output via Serial (USB)
+  if (ENABLE_SERIAL) {
+    Serial.println(json);
+  }
 
-  Serial.println("}");
+  // Output via WiFi UDP
+  if (ENABLE_WIFI && wifiConnected) {
+    udp.beginPacket(PC_IP, UDP_PORT);
+    udp.print(json);
+    udp.endPacket();
+  }
 
   delay(50);
 }
@@ -324,31 +428,157 @@ void loop() {
 
 ---
 
-## Notes
+## Python Configuration
 
-- **Gyro calibration:** Keep the device stationary during startup (~1 second) for accurate bias calibration.
-- **Yaw drift:** The yaw angle will drift over time since there's no magnetometer for absolute heading. Consider adding a magnetometer (e.g., HMC5883L) if absolute heading is needed.
-- **Complementary filter:** The `alpha` constant (0.98) balances gyro responsiveness vs. accelerometer noise rejection. Adjust if needed.
-- If you want **real-world timestamps**, replace `millis()` with a real-time clock (RTC) or NTP sync (ESP32 WiFi).
-- If you change baud rates, make sure **Nano and ESP32 match**.
-- If you want faster readings, reduce delays but ensure sensors are not interfering.
+### config.py settings
+
+```python
+# External sensor settings (ESP32 pod)
+# Mode: "serial" (USB tethered) or "udp" (WiFi wireless)
+EXT_SENSOR_MODE = "serial"  # Change to "udp" for wireless operation
+
+# Serial mode settings
+EXT_SENSOR_PORT = "/dev/ttyUSB0"  # Linux default, use "COM3" etc on Windows
+EXT_SENSOR_BAUD = 115200
+
+# UDP mode settings (for WiFi)
+EXT_SENSOR_UDP_PORT = 5000  # Port to listen on for ESP32 UDP packets
+```
+
+### Environment variable overrides
+
+```bash
+# Serial mode
+EXT_SENSOR_MODE=serial EXT_SENSOR_PORT=COM3 python main.py
+
+# UDP mode
+EXT_SENSOR_MODE=udp EXT_SENSOR_UDP_PORT=5000 python main.py
+```
+
+---
+
+## Setup Guide
+
+### Tethered Mode (Serial)
+
+1. Upload `NanoSensorsCozmo.cpp` to Arduino Nano
+2. Upload `esp32Cozmo.cpp` to ESP32 (with `ENABLE_WIFI = false` or leave as-is)
+3. Connect ESP32 to PC via USB
+4. Set `EXT_SENSOR_MODE = "serial"` in `config.py`
+5. Run `python main.py`
+
+### Wireless Mode (WiFi UDP)
+
+1. **Hardware setup:**
+   - Get a USB WiFi adapter for your PC
+   - Connect PC's built-in WiFi to your home network
+   - Connect USB WiFi adapter to Cozmo's network
+
+2. **Find your PC's IP address:**
+   ```bash
+   # Windows
+   ipconfig
+
+   # Linux/Mac
+   ip addr
+   ```
+   Look for your home network adapter's IP (e.g., `192.168.1.50`)
+
+3. **Configure ESP32:**
+   Edit `sensors/esp32Cozmo.cpp`:
+   ```cpp
+   const char* WIFI_SSID = "YourHomeWiFi";
+   const char* WIFI_PASS = "YourWiFiPassword";
+   const char* PC_IP = "192.168.1.50";  // Your PC's IP
+   const int UDP_PORT = 5000;
+   const bool ENABLE_WIFI = true;
+   ```
+
+4. **Upload firmware:**
+   - Upload `NanoSensorsCozmo.cpp` to Arduino Nano
+   - Upload `esp32Cozmo.cpp` to ESP32
+
+5. **Configure Python:**
+   Set `EXT_SENSOR_MODE = "udp"` in `config.py`
+
+6. **Run:**
+   ```bash
+   python main.py
+   ```
+
+---
+
+## Testing
+
+### Test Nano standalone
+Connect Nano via USB and open Serial Monitor (9600 baud):
+```
+L:150 C:200 R:180
+L:152 C:198 R:182
+```
+
+### Test ESP32 standalone (serial mode)
+Connect ESP32 via USB and open Serial Monitor (115200 baud):
+```
+{"ts_ms":1000,"tof_mm":41,"mpu":{...},"ultra_l_mm":85,"ultra_c_mm":116,"ultra_r_mm":72}
+```
+
+### Test Python receiver (serial)
+```bash
+python -m perception.external_sensors COM3
+# or
+python -m perception.external_sensors /dev/ttyUSB0
+```
+
+### Test Python receiver (UDP)
+```bash
+python -m perception.external_sensors udp 5000
+```
+
+---
+
+## Troubleshooting
+
+### ESP32 won't connect to WiFi
+- Check SSID and password are correct
+- Make sure your router allows new devices
+- Try moving closer to the router
+- Check Serial Monitor for error messages
+
+### PC not receiving UDP packets
+- Verify PC IP address is correct in ESP32 code
+- Check firewall isn't blocking UDP port 5000
+- Make sure PC is on the same network as ESP32
+- Try `netcat -ul 5000` to test UDP reception
+
+### Ultrasonic readings are -1
+- Check Nano → ESP32 wiring (D11 → GPIO16)
+- Verify Nano is running and sending data
+- Check baud rate matches (9600)
+
+### Sensor readings are noisy
+- Add capacitors near sensor power pins
+- Use shorter wires
+- Increase delay between readings
 
 ---
 
 ## Required Libraries
 
-| Library | Install via |
-|---------|-------------|
-| Adafruit_VL53L0X | Arduino Library Manager |
-| MPU6050 | Arduino Library Manager (by Electronic Cats or jrowberg/i2cdevlib) |
+| Library | Platform | Install via |
+|---------|----------|-------------|
+| Adafruit_VL53L0X | ESP32 | Arduino Library Manager |
+| MPU6050 | ESP32 | Arduino Library Manager (Electronic Cats or jrowberg/i2cdevlib) |
+| SoftwareSerial | Nano | Built-in |
+| WiFi | ESP32 | Built-in |
+| WiFiUdp | ESP32 | Built-in |
 
 ---
 
-## Quick Verification
+## Notes
 
-When working correctly, the ESP32 serial output should look like:
-
-```
-{"ts_ms":1000,"tof_mm":41,"mpu":{"ax_g":0.012,"ay_g":-0.034,"az_g":1.002,"gx_dps":0.15,"gy_dps":-0.22,"gz_dps":0.08,"pitch":1.23,"roll":-0.45,"yaw":12.5},"ultra_l_mm":85,"ultra_c_mm":116,"ultra_r_mm":72}
-{"ts_ms":1050,"tof_mm":37,"mpu":{"ax_g":0.010,"ay_g":-0.032,"az_g":1.001,"gx_dps":0.12,"gy_dps":-0.20,"gz_dps":0.06,"pitch":1.21,"roll":-0.44,"yaw":12.6},"ultra_l_mm":84,"ultra_c_mm":115,"ultra_r_mm":71}
-```
+- **Gyro calibration:** Keep the device stationary during startup (~1 second) for accurate bias calibration.
+- **Yaw drift:** The yaw angle will drift over time since there's no magnetometer for absolute heading.
+- **Complementary filter:** The `alpha` constant (0.98) balances gyro responsiveness vs. accelerometer noise rejection.
+- If you want faster readings, reduce delays but ensure sensors are not interfering.
+- The ESP32 outputs at ~20Hz (50ms delay). Adjust if needed.

@@ -1,18 +1,38 @@
+// ESP32 Sensor Pod - VL53L0X ToF + MPU6050 IMU + Nano Ultrasonics
+// Outputs JSON via:
+//   1. USB Serial (for debugging/tethered mode)
+//   2. WiFi UDP (for wireless operation)
+
 #include <Wire.h>
+#include <WiFi.h>
+#include <WiFiUdp.h>
 #include <Adafruit_VL53L0X.h>
 #include <MPU6050.h>
+
+// =============================================================================
+// CONFIGURATION - Edit these for your setup
+// =============================================================================
+const char* WIFI_SSID = "YOUR_WIFI_SSID";      // Your home WiFi network name
+const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";  // Your home WiFi password
+const char* PC_IP = "192.168.1.50";            // Your PC's IP on the network
+const int UDP_PORT = 5000;                      // UDP port to send to
+
+const bool ENABLE_WIFI = true;   // Set false to disable WiFi (serial only)
+const bool ENABLE_SERIAL = true; // Set false to disable serial output
+// =============================================================================
 
 Adafruit_VL53L0X lox;
 MPU6050 mpu;
 HardwareSerial NanoSerial(1);
+WiFiUDP udp;
 
 // --- Calibration & filtering ---
 float gyroBiasX = 0, gyroBiasY = 0, gyroBiasZ = 0;
-
 float pitch = 0, roll = 0, yaw = 0;
 unsigned long lastTime = 0;
-
 const float alpha = 0.98;  // complementary filter constant
+
+bool wifiConnected = false;
 
 void setup() {
   Serial.begin(115200);
@@ -35,9 +55,39 @@ void setup() {
   // UART to Nano
   NanoSerial.begin(9600, SERIAL_8N1, 16, 17);
 
+  // WiFi setup
+  if (ENABLE_WIFI) {
+    Serial.print("Connecting to WiFi: ");
+    Serial.println(WIFI_SSID);
+
+    WiFi.begin(WIFI_SSID, WIFI_PASS);
+
+    int attempts = 0;
+    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+      delay(500);
+      Serial.print(".");
+      attempts++;
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+      wifiConnected = true;
+      Serial.println();
+      Serial.print("WiFi connected! IP: ");
+      Serial.println(WiFi.localIP());
+      Serial.print("Sending UDP to: ");
+      Serial.print(PC_IP);
+      Serial.print(":");
+      Serial.println(UDP_PORT);
+    } else {
+      Serial.println();
+      Serial.println("WiFi connection failed - continuing with serial only");
+    }
+  }
+
   Serial.println("ESP32 Ready");
 
   // --- Calibrate gyro bias (simple average) ---
+  Serial.println("Calibrating gyro - keep device still...");
   const int samples = 200;
   long gxSum = 0, gySum = 0, gzSum = 0;
   int16_t ax, ay, az, gx, gy, gz;
@@ -53,6 +103,7 @@ void setup() {
   gyroBiasX = gxSum / (float)samples;
   gyroBiasY = gySum / (float)samples;
   gyroBiasZ = gzSum / (float)samples;
+  Serial.println("Calibration complete");
 
   lastTime = millis();
 }
@@ -126,34 +177,43 @@ void loop() {
     }
   }
 
-  // Build final JSON with timestamp
-  unsigned long ts = millis();
+  // Build JSON string
+  String json = "{\"ts_ms\":";
+  json += millis();
+  json += ",\"tof_mm\":";
+  json += tofDist;
 
-  Serial.print("{\"ts_ms\":");
-  Serial.print(ts);
-  Serial.print(",\"tof_mm\":");
-  Serial.print(tofDist);
+  json += ",\"mpu\":{";
+  json += "\"ax_g\":"; json += String(ax_g, 3);
+  json += ",\"ay_g\":"; json += String(ay_g, 3);
+  json += ",\"az_g\":"; json += String(az_g, 3);
+  json += ",\"gx_dps\":"; json += String(gx_dps, 3);
+  json += ",\"gy_dps\":"; json += String(gy_dps, 3);
+  json += ",\"gz_dps\":"; json += String(gz_dps, 3);
+  json += ",\"pitch\":"; json += String(pitch, 3);
+  json += ",\"roll\":"; json += String(roll, 3);
+  json += ",\"yaw\":"; json += String(yaw, 3);
+  json += "}";
 
-  Serial.print(",\"mpu\":{");
-  Serial.print("\"ax_g\":"); Serial.print(ax_g, 3);
-  Serial.print(",\"ay_g\":"); Serial.print(ay_g, 3);
-  Serial.print(",\"az_g\":"); Serial.print(az_g, 3);
-  Serial.print(",\"gx_dps\":"); Serial.print(gx_dps, 3);
-  Serial.print(",\"gy_dps\":"); Serial.print(gy_dps, 3);
-  Serial.print(",\"gz_dps\":"); Serial.print(gz_dps, 3);
-  Serial.print(",\"pitch\":"); Serial.print(pitch, 3);
-  Serial.print(",\"roll\":"); Serial.print(roll, 3);
-  Serial.print(",\"yaw\":"); Serial.print(yaw, 3);
-  Serial.print("}");
+  json += ",\"ultra_l_mm\":";
+  json += L;
+  json += ",\"ultra_c_mm\":";
+  json += C;
+  json += ",\"ultra_r_mm\":";
+  json += R;
+  json += "}";
 
-  Serial.print(",\"ultra_l_mm\":");
-  Serial.print(L);
-  Serial.print(",\"ultra_c_mm\":");
-  Serial.print(C);
-  Serial.print(",\"ultra_r_mm\":");
-  Serial.print(R);
+  // Output via Serial (USB)
+  if (ENABLE_SERIAL) {
+    Serial.println(json);
+  }
 
-  Serial.println("}");
+  // Output via WiFi UDP
+  if (ENABLE_WIFI && wifiConnected) {
+    udp.beginPacket(PC_IP, UDP_PORT);
+    udp.print(json);
+    udp.endPacket();
+  }
 
   delay(50);
 }

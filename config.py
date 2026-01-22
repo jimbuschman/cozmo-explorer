@@ -63,5 +63,12 @@ MAX_EXPERIENCES = 1000  # max items in ChromaDB before pruning
 EXPERIENCE_RELEVANCE_THRESHOLD = 0.7  # similarity threshold for "seen before"
 
 # External sensor settings (ESP32 pod)
+# Mode: "serial" (USB tethered) or "udp" (WiFi wireless)
+EXT_SENSOR_MODE = "serial"  # Change to "udp" for wireless operation
+
+# Serial mode settings
 EXT_SENSOR_PORT = "/dev/ttyUSB0"  # Linux default, use "COM3" etc on Windows
 EXT_SENSOR_BAUD = 115200
+
+# UDP mode settings (for WiFi)
+EXT_SENSOR_UDP_PORT = 5000  # Port to listen on for ESP32 UDP packets
