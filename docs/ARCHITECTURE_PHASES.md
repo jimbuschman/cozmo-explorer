@@ -40,6 +40,8 @@ Teach the system how to **exist safely** in the physical world.
 - Log everything (sensors, actions, outcomes, images)
 - Learn micro-rules ("when left sensor < 200mm, turn right works better")
 - Build crude occupancy maps
+- **Trailer mode**: Arc-based turns for pulling a trailer without jackknifing
+- **Manual control**: Keyboard control for testing and generating training data
 
 ### Data Collected
 | Source | Data | Purpose |
@@ -338,6 +340,8 @@ cozmo-explorer/
 │   ├── behaviors.py          # Wander, recover, avoid
 │   ├── state_machine.py      # Simple states
 │   └── learning_coordinator.py
+├── control/
+│   └── manual_controller.py  # Tkinter GUI for manual control
 ├── memory/
 │   ├── experience_logger.py  # Log everything
 │   ├── pattern_analyzer.py   # Find patterns

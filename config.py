@@ -72,3 +72,26 @@ EXT_SENSOR_BAUD = 115200
 
 # UDP mode settings (for WiFi)
 EXT_SENSOR_UDP_PORT = 5000  # Port to listen on for ESP32 UDP packets
+
+# =============================================================================
+# TRAILER MODE
+# =============================================================================
+# When enabled, disables in-place turns and uses arc-based turns instead.
+# This prevents trailer jackknifing during turns.
+
+TRAILER_MODE = False  # Set True when Cozmo has a trailer attached
+TRAILER_ARC_RATIO = 0.5  # Default inner wheel speed ratio (0.5 = 50% of outer)
+
+# Learnable arc ratios - the learning system can propose rules using these
+ARC_RATIOS = {
+    "gentle": 0.5,   # Wide turn, good for long trailers
+    "medium": 0.6,   # Moderate turn
+    "tight": 0.7,    # Tighter arc, when space is limited
+}
+
+# =============================================================================
+# MANUAL CONTROL MODE
+# =============================================================================
+# Allows direct control of the robot via keyboard for testing and training data.
+
+MANUAL_CONTROL_ENABLED = False  # Start in manual mode if True

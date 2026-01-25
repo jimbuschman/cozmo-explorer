@@ -27,6 +27,7 @@ from memory.experience_logger import ExperienceLogger
 from memory.pattern_analyzer import PatternAnalyzer
 from memory.learned_rules import LearnedRulesStore
 from brain.learning_coordinator import LearningCoordinator
+from control.manual_controller import ManualController
 
 # Configure logging - both screen and file
 log_format = '%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s'
@@ -72,6 +73,10 @@ class CozmoExplorer:
         self.rules_store: Optional[LearnedRulesStore] = None
         self.pattern_analyzer: Optional[PatternAnalyzer] = None
         self.learning_coordinator: Optional[LearningCoordinator] = None
+
+        # Manual control
+        self.manual_controller: Optional[ManualController] = None
+        self._manual_mode = False  # True when in manual mode
 
         self._running = False
         self._start_time: datetime = None
@@ -240,12 +245,27 @@ class CozmoExplorer:
         # Connect vision observations to memory context
         self._setup_vision_callback()
 
+        # Initialize manual controller if enabled
+        if config.MANUAL_CONTROL_ENABLED:
+            logger.info("Manual control enabled - creating controller")
+            self.manual_controller = ManualController(
+                robot=self.robot,
+                experience_logger=self.experience_logger,
+                rules_store=self.rules_store,
+                on_mode_change=self._on_manual_mode_change
+            )
+            self._manual_mode = True
+        else:
+            self._manual_mode = False
+
         logger.info("Initialization complete!")
 
         # Log mission start to journal
+        trailer_status = "with trailer" if config.TRAILER_MODE else "without trailer"
+        manual_status = "manual control" if config.MANUAL_CONTROL_ENABLED else "autonomous"
         self.personality.log_milestone(
             "Mission Started",
-            f"Beginning exploration. Previous experiences: {exp_count}. Systems nominal."
+            f"Beginning exploration ({manual_status}, {trailer_status}). Previous experiences: {exp_count}. Systems nominal."
         )
 
         return True
@@ -277,8 +297,22 @@ class CozmoExplorer:
             await self.robot.set_head_angle(0.35)  # Look up/forward
             logger.info("Head positioned for exploration")
 
-            # Start state machine in background
-            state_task = asyncio.create_task(self.state_machine.start())
+            # Start manual controller GUI if enabled
+            if self.manual_controller:
+                logger.info("Starting manual control GUI...")
+                loop = asyncio.get_event_loop()
+                self.manual_controller.start(loop)
+
+                # Run GUI in a separate thread
+                import threading
+                gui_thread = threading.Thread(target=self.manual_controller.run_gui, daemon=True)
+                gui_thread.start()
+                logger.info("Manual control GUI running in background")
+
+            # Start state machine in background (if not in manual mode)
+            state_task = None
+            if not self._manual_mode:
+                state_task = asyncio.create_task(self.state_machine.start())
 
             # Start vision observer
             await self.vision_observer.start()
@@ -288,14 +322,27 @@ class CozmoExplorer:
             while self._running:
                 await asyncio.sleep(0.5)
 
+                # Check if manual controller closed
+                if self.manual_controller and not self.manual_controller.is_running:
+                    logger.info("Manual controller closed - exiting")
+                    break
+
                 # Refresh pose from pycozmo
                 self.robot._update_pose_from_client()
 
-                # Update spatial map with current position
+                # Update spatial map with current position (even in manual mode)
                 x, y = self.robot.pose.x, self.robot.pose.y
                 if abs(x - last_x) > 10 or abs(y - last_y) > 10:
                     self.spatial_map.mark_visited(x, y)
                     last_x, last_y = x, y
+
+                # Start/stop state machine based on mode changes
+                if not self._manual_mode and state_task is None:
+                    logger.info("Starting autonomous behaviors...")
+                    state_task = asyncio.create_task(self.state_machine.start())
+                elif self._manual_mode and state_task is not None:
+                    # Will be handled by pause/resume in state machine
+                    pass
 
                 # Periodic status
                 if self.state_machine.context.exploration_time % 30 < 0.5:
@@ -309,6 +356,10 @@ class CozmoExplorer:
     async def _shutdown(self):
         """Clean shutdown"""
         logger.info("Shutting down...")
+
+        # Stop manual controller
+        if self.manual_controller:
+            self.manual_controller.stop()
 
         # Stop vision observer
         if self.vision_observer:
@@ -398,6 +449,18 @@ class CozmoExplorer:
             outcome = "completed" if success else "failed"
             self.state_machine.memory_context.update_last_decision_outcome(outcome, success)
 
+    def _on_manual_mode_change(self, is_manual: bool):
+        """Handle switching between manual and auto modes"""
+        self._manual_mode = is_manual
+        if is_manual:
+            logger.info("Switched to MANUAL mode - autonomous behaviors paused")
+            if self.state_machine:
+                self.state_machine.pause()
+        else:
+            logger.info("Switched to AUTO mode - autonomous behaviors resumed")
+            if self.state_machine:
+                self.state_machine.resume()
+
     def _setup_vision_callback(self):
         """Set up callback to feed vision observations to memory context"""
         if not self.vision_observer:
@@ -440,7 +503,9 @@ class CozmoExplorer:
         llm_status = "observer" if config.LLM_OBSERVER_MODE else "director"
         if not self.llm:
             llm_status = "disabled"
-        logger.info(f"Mode: {mode} | LLM: {llm_status}")
+        control_mode = "MANUAL" if self._manual_mode else "AUTO"
+        trailer_status = "TRAILER" if config.TRAILER_MODE else ""
+        logger.info(f"Mode: {mode} | LLM: {llm_status} | Control: {control_mode} {trailer_status}")
 
         logger.info(f"State: {sm.state.name}")
         logger.info(f"Position: ({robot.pose.x:.0f}, {robot.pose.y:.0f})")

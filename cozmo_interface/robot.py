@@ -19,6 +19,8 @@ except ImportError:
 
 from PIL import Image
 
+import config
+
 logger = logging.getLogger(__name__)
 
 
@@ -411,13 +413,26 @@ class CozmoRobot:
 
     async def turn(self, angle: float, speed: float = 30.0):
         """
-        Turn in place.
+        Turn in place (or arc turn if TRAILER_MODE enabled).
 
         Args:
             angle: Angle in degrees (positive = left, negative = right)
-            speed: Turn speed in deg/s
+            speed: Turn speed in deg/s (used as base speed for arc turns)
         """
         if not self.is_connected:
+            return
+
+        # If trailer mode is enabled, use arc turns instead of in-place turns
+        if config.TRAILER_MODE:
+            ratio = config.TRAILER_ARC_RATIO
+            # Arc turns need more time than in-place turns for same angle
+            # Roughly 2x duration for gentle arcs
+            arc_duration = abs(angle) / speed * 2.0
+
+            if angle > 0:
+                await self.arc_turn_left(speed, ratio, arc_duration)
+            else:
+                await self.arc_turn_right(speed, ratio, arc_duration)
             return
 
         if pycozmo and self._client:
@@ -444,6 +459,120 @@ class CozmoRobot:
             logger.debug(f"SIM: turn angle={angle} speed={speed}")
 
         await asyncio.sleep(abs(angle) / speed)
+
+    async def arc_turn_left(self, speed: float = 50.0, ratio: float = 0.5, duration: float = 1.0):
+        """
+        Arc turn to the left (both wheels forward, left wheel slower).
+
+        Good for trailer mode where in-place turns would jackknife.
+
+        Args:
+            speed: Outer wheel speed in mm/s
+            ratio: Inner wheel speed ratio (0.5 = 50% of outer)
+            duration: How long to turn in seconds
+        """
+        if not self.is_connected:
+            return
+
+        inner_speed = speed * ratio  # Left wheel (inner)
+        outer_speed = speed          # Right wheel (outer)
+
+        if pycozmo and self._client:
+            self._client.drive_wheels(
+                lwheel_speed=inner_speed,
+                rwheel_speed=outer_speed,
+                duration=duration
+            )
+        else:
+            logger.debug(f"SIM: arc_turn_left speed={speed} ratio={ratio} duration={duration}")
+
+        await asyncio.sleep(duration)
+
+    async def arc_turn_right(self, speed: float = 50.0, ratio: float = 0.5, duration: float = 1.0):
+        """
+        Arc turn to the right (both wheels forward, right wheel slower).
+
+        Good for trailer mode where in-place turns would jackknife.
+
+        Args:
+            speed: Outer wheel speed in mm/s
+            ratio: Inner wheel speed ratio (0.5 = 50% of outer)
+            duration: How long to turn in seconds
+        """
+        if not self.is_connected:
+            return
+
+        outer_speed = speed          # Left wheel (outer)
+        inner_speed = speed * ratio  # Right wheel (inner)
+
+        if pycozmo and self._client:
+            self._client.drive_wheels(
+                lwheel_speed=outer_speed,
+                rwheel_speed=inner_speed,
+                duration=duration
+            )
+        else:
+            logger.debug(f"SIM: arc_turn_right speed={speed} ratio={ratio} duration={duration}")
+
+        await asyncio.sleep(duration)
+
+    async def reverse_arc_turn_left(self, speed: float = 50.0, ratio: float = 0.5, duration: float = 1.0):
+        """
+        Reverse arc turn to the left (both wheels backward, left wheel slower).
+
+        Good for backing out with a trailer - turns the trailer to the right
+        while backing up.
+
+        Args:
+            speed: Outer wheel speed in mm/s (will be negated for reverse)
+            ratio: Inner wheel speed ratio (0.5 = 50% of outer)
+            duration: How long to turn in seconds
+        """
+        if not self.is_connected:
+            return
+
+        inner_speed = -speed * ratio  # Left wheel (inner, reversed)
+        outer_speed = -speed          # Right wheel (outer, reversed)
+
+        if pycozmo and self._client:
+            self._client.drive_wheels(
+                lwheel_speed=inner_speed,
+                rwheel_speed=outer_speed,
+                duration=duration
+            )
+        else:
+            logger.debug(f"SIM: reverse_arc_turn_left speed={speed} ratio={ratio} duration={duration}")
+
+        await asyncio.sleep(duration)
+
+    async def reverse_arc_turn_right(self, speed: float = 50.0, ratio: float = 0.5, duration: float = 1.0):
+        """
+        Reverse arc turn to the right (both wheels backward, right wheel slower).
+
+        Good for backing out with a trailer - turns the trailer to the left
+        while backing up.
+
+        Args:
+            speed: Outer wheel speed in mm/s (will be negated for reverse)
+            ratio: Inner wheel speed ratio (0.5 = 50% of outer)
+            duration: How long to turn in seconds
+        """
+        if not self.is_connected:
+            return
+
+        outer_speed = -speed          # Left wheel (outer, reversed)
+        inner_speed = -speed * ratio  # Right wheel (inner, reversed)
+
+        if pycozmo and self._client:
+            self._client.drive_wheels(
+                lwheel_speed=outer_speed,
+                rwheel_speed=inner_speed,
+                duration=duration
+            )
+        else:
+            logger.debug(f"SIM: reverse_arc_turn_right speed={speed} ratio={ratio} duration={duration}")
+
+        await asyncio.sleep(duration)
 
     async def stop(self):
         """Stop all movement immediately"""

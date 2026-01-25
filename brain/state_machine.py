@@ -108,6 +108,7 @@ class StateMachine:
         self.context = StateContext()
 
         self._running = False
+        self._paused = False
         self._current_behavior: Optional[Behavior] = None
         self._last_learning_time: Optional[datetime] = None
 
@@ -169,6 +170,25 @@ class StateMachine:
 
         await self.robot.stop()
 
+    def pause(self):
+        """Pause the state machine (for manual control)"""
+        if not self._paused:
+            logger.info("State machine paused")
+            self._paused = True
+            if self._current_behavior:
+                self._current_behavior.cancel()
+
+    def resume(self):
+        """Resume the state machine after pause"""
+        if self._paused:
+            logger.info("State machine resumed")
+            self._paused = False
+
+    @property
+    def is_paused(self) -> bool:
+        """Check if state machine is paused"""
+        return self._paused
+
     def set_goal(self, goal: Goal):
         """Set a new goal for the robot"""
         logger.info(f"New goal: {goal.description}")
@@ -178,6 +198,11 @@ class StateMachine:
     async def _run_loop(self):
         """Main state machine loop"""
         while self._running:
+            # Check if paused (manual control mode)
+            if self._paused:
+                await asyncio.sleep(0.5)
+                continue
+
             # Check for safety conditions first
             if await self._check_safety():
                 continue

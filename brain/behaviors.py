@@ -340,15 +340,17 @@ class WanderBehavior(Behavior):
         sensor_context = self._get_sensor_context()
 
         # Determine turn angles - apply learned rules if available
-        base_action = {"angles": self.DEFAULT_CLIFF_ANGLES, "backup_duration": 0.5}
+        base_action = {"angles": self.DEFAULT_CLIFF_ANGLES, "backup_duration": 0.5, "arc_ratio": "gentle"}
         applied_rule_id = None
         if self.rules_store:
             modified_action, applied_rule_id = self.rules_store.apply_rules_to_action(base_action, sensor_context)
             angles = modified_action.get("angles", self.DEFAULT_CLIFF_ANGLES)
             backup_duration = modified_action.get("backup_duration", 0.5)
+            arc_ratio_name = modified_action.get("arc_ratio", "gentle")
         else:
             angles = self.DEFAULT_CLIFF_ANGLES
             backup_duration = 0.5
+            arc_ratio_name = "gentle"
 
         # Choose angle
         angle = random.choice(angles)
@@ -358,7 +360,13 @@ class WanderBehavior(Behavior):
         if self.experience_logger:
             action_id = self.experience_logger.log_action(
                 action_type="escape_cliff",
-                parameters={"angle": angle, "backup_duration": backup_duration, "rule_id": applied_rule_id},
+                parameters={
+                    "angle": angle,
+                    "backup_duration": backup_duration,
+                    "rule_id": applied_rule_id,
+                    "trailer_mode": config.TRAILER_MODE,
+                    "arc_ratio": arc_ratio_name if config.TRAILER_MODE else None
+                },
                 trigger="cliff",
                 context_snapshot_id=snapshot_id
             )
@@ -367,9 +375,20 @@ class WanderBehavior(Behavior):
 
         # Execute the escape maneuver
         await self.robot.stop()
-        await self.robot.drive(-self.speed, duration=backup_duration)
-        await asyncio.sleep(backup_duration)
-        await self.robot.turn(angle)
+
+        if config.TRAILER_MODE:
+            # Use reverse arc turn for trailer - combines backup and turn
+            arc_ratio = config.ARC_RATIOS.get(arc_ratio_name, config.TRAILER_ARC_RATIO)
+            # Reverse arc turns the trailer while backing up
+            if angle > 0:
+                await self.robot.reverse_arc_turn_right(self.speed, arc_ratio, backup_duration + 0.5)
+            else:
+                await self.robot.reverse_arc_turn_left(self.speed, arc_ratio, backup_duration + 0.5)
+        else:
+            # Normal mode: back up straight then turn
+            await self.robot.drive(-self.speed, duration=backup_duration)
+            await asyncio.sleep(backup_duration)
+            await self.robot.turn(angle)
 
         # Log outcome (assume success if we get here without another cliff)
         if self.experience_logger and action_id:
@@ -416,15 +435,17 @@ class WanderBehavior(Behavior):
         sensor_context = self._get_sensor_context()
 
         # Determine turn angles - apply learned rules if available
-        base_action = {"angles": self.DEFAULT_STALL_ANGLES, "backup_duration": 0.7}
+        base_action = {"angles": self.DEFAULT_STALL_ANGLES, "backup_duration": 0.7, "arc_ratio": "medium"}
         applied_rule_id = None
         if self.rules_store:
             modified_action, applied_rule_id = self.rules_store.apply_rules_to_action(base_action, sensor_context)
             angles = modified_action.get("angles", self.DEFAULT_STALL_ANGLES)
             backup_duration = modified_action.get("backup_duration", 0.7)
+            arc_ratio_name = modified_action.get("arc_ratio", "medium")
         else:
             angles = self.DEFAULT_STALL_ANGLES
             backup_duration = 0.7
+            arc_ratio_name = "medium"
 
         # Choose angle
         angle = random.choice(angles)
@@ -434,7 +455,13 @@ class WanderBehavior(Behavior):
         if self.experience_logger:
             action_id = self.experience_logger.log_action(
                 action_type="escape_stall",
-                parameters={"angle": angle, "backup_duration": backup_duration, "rule_id": applied_rule_id},
+                parameters={
+                    "angle": angle,
+                    "backup_duration": backup_duration,
+                    "rule_id": applied_rule_id,
+                    "trailer_mode": config.TRAILER_MODE,
+                    "arc_ratio": arc_ratio_name if config.TRAILER_MODE else None
+                },
                 trigger="collision" if self.robot.sensors.collision_detected else "stall",
                 context_snapshot_id=snapshot_id
             )
@@ -443,9 +470,20 @@ class WanderBehavior(Behavior):
 
         # Execute the escape maneuver
         await self.robot.stop()
-        await self.robot.drive(-self.speed, duration=backup_duration)
-        await asyncio.sleep(backup_duration)
-        await self.robot.turn(angle)
+
+        if config.TRAILER_MODE:
+            # Use reverse arc turn for trailer - combines backup and turn
+            arc_ratio = config.ARC_RATIOS.get(arc_ratio_name, config.TRAILER_ARC_RATIO)
+            # Reverse arc turns the trailer while backing up
+            if angle > 0:
+                await self.robot.reverse_arc_turn_right(self.speed, arc_ratio, backup_duration + 0.3)
+            else:
+                await self.robot.reverse_arc_turn_left(self.speed, arc_ratio, backup_duration + 0.3)
+        else:
+            # Normal mode: back up straight then turn
+            await self.robot.drive(-self.speed, duration=backup_duration)
+            await asyncio.sleep(backup_duration)
+            await self.robot.turn(angle)
 
         # Log outcome - check if we're still stuck after the maneuver
         if self.experience_logger and action_id:

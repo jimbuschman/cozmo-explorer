@@ -104,7 +104,19 @@ ollama serve
 
 Leave this running. If you can't run Ollama, the system will fall back to statistical-only learning.
 
-### Step 5: Run Cozmo Explorer
+### Step 5: Configure Mode (Optional)
+
+Edit `config.py` to enable optional features:
+
+```python
+# Trailer Mode - for when Cozmo has a trailer attached
+TRAILER_MODE = False  # Set True to use arc turns instead of in-place turns
+
+# Manual Control - for testing and training data collection
+MANUAL_CONTROL_ENABLED = False  # Set True to launch manual control GUI
+```
+
+### Step 6: Run Cozmo Explorer
 
 ```bash
 cd cozmo-explorer
@@ -135,7 +147,7 @@ python main.py
 08:30:20 | INFO     | __main__            | Initialization complete!
 ```
 
-### Step 6: Let It Explore
+### Step 7: Let It Explore (Autonomous Mode)
 
 - Place Cozmo on the floor in a room with obstacles
 - Let it wander and bump into things
@@ -144,7 +156,30 @@ python main.py
   - `escape_stall` / `escape_cliff` actions
   - `Captured before/after image`
 
-### Step 7: Stop Gracefully
+### Manual Control Mode (Optional)
+
+If you set `MANUAL_CONTROL_ENABLED = True`, a GUI window will open:
+
+**Keyboard Controls:**
+| Key | Action |
+|-----|--------|
+| Arrow Up/Down | Forward/Backward |
+| Arrow Left/Right | Turn (arc turn if trailer mode) |
+| A/D | Gentle arc turns |
+| Q/E | Reverse arc turns (for backing with trailer) |
+| Page Up/Down | Head up/down |
+| R/F | Lift up/down |
+| Space | Stop |
+| M | Toggle Manual/Auto mode |
+| L | Toggle logging on/off |
+| Escape | Exit |
+
+**Key Feature:** Manual control uses the same robot interface as autonomous mode, so:
+- Manual driving generates training data for the learning system
+- You can test recovery maneuvers manually
+- Switch between manual and auto with the M key
+
+### Step 8: Stop Gracefully
 
 Press `Ctrl+C` to stop. You'll see:
 
