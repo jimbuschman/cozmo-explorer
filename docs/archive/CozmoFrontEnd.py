@@ -97,28 +97,116 @@ class SimpleCozmoController:
     #     self.cozmo.set_lift_height(5)        
     #     self.current_lift_index = 0
     #     self.lift_physically_moving = False
+
     def _sync_lift_position(self):
         if not self.cozmo:
             return
-        self.cozmo.set_lift_height(0.0)  # Changed from 5 to 0.0
+        try:
+            print("Attempting to sync lift position...")
+            self.cozmo.set_lift_height(0.0)
+            print("Lift sync command sent")
+        except Exception as e:
+            print(f"Lift sync error: {e}")
         self.current_lift_index = 0
         self.lift_physically_moving = False
+    def turn_left_arc(self, radius=200):
+        """Turn left in an arc like a car"""
+        if self.cozmo:
+            # For arc turning: inner wheel slower, outer wheel faster
+            # The ratio depends on the radius
+            outer_speed = self.speed
+            inner_speed = self.speed * 0.5  # Adjust this ratio for tighter/wider turns
+            self.cozmo.drive_wheels(lwheel_speed=inner_speed, rwheel_speed=outer_speed)
 
+    def turn_right_arc(self, radius=200):
+        """Turn right in an arc like a car"""
+        if self.cozmo:
+            outer_speed = self.speed
+            inner_speed = self.speed * 0.5
+            self.cozmo.drive_wheels(lwheel_speed=outer_speed, rwheel_speed=inner_speed)
+
+    def reverse_turn_left(self):
+        """Turn left while reversing (like a car in reverse)"""
+        if self.cozmo:
+            # When reversing, left turn means right wheel slower
+            self.cozmo.drive_wheels(lwheel_speed=-self.speed, rwheel_speed=-self.speed * 0.7)
+
+    def reverse_turn_right(self):
+        """Turn right while reversing (like a car in reverse)"""
+        if self.cozmo:
+            # When reversing, right turn means left wheel slower
+            self.cozmo.drive_wheels(lwheel_speed=-self.speed * 0.7, rwheel_speed=-self.speed)
+
+    def gentle_turn_left(self):
+        """Very gentle left turn for trailers"""
+        if self.cozmo:
+            self.cozmo.drive_wheels(lwheel_speed=self.speed * 0.7, rwheel_speed=self.speed)
+
+    def gentle_turn_right(self):
+        """Very gentle right turn for trailers"""
+        if self.cozmo:
+            self.cozmo.drive_wheels(lwheel_speed=self.speed, rwheel_speed=self.speed * 0.7)
     def raise_arm(self):
+        print(f"raise_arm called - index: {self.current_lift_index}")
+    
         if self.cozmo and not self.lift_physically_moving and self.current_lift_index < len(self.lift_positions) - 1:
             self.lift_physically_moving = True
             self.current_lift_index += 1
-            height = self.lift_positions[self.current_lift_index]
-            self.cozmo.set_lift_height(height)
-            self.root.after(800, lambda: setattr(self, 'lift_physically_moving', False))
+        
+            try:
+                # Try move_lift with speed control
+                self.cozmo.move_lift(2.0)  # Positive speed = up
+                self.root.after(500, lambda: self.cozmo.move_lift(0))  # Stop after 500ms
+                print("Move lift up command sent")
+            except AttributeError:
+                # Fallback to set_lift_height
+                height = self.lift_positions[self.current_lift_index]
+                self.cozmo.set_lift_height(height)
+                print(f"Set lift height to {height}")
+            except Exception as e:
+                print(f"Lift command error: {e}")
+        
+            self.root.after(1000, lambda: setattr(self, 'lift_physically_moving', False))
 
     def lower_arm(self):
+        print(f"lower_arm called - index: {self.current_lift_index}")
+    
         if self.cozmo and not self.lift_physically_moving and self.current_lift_index > 0:
             self.lift_physically_moving = True
             self.current_lift_index -= 1
-            height = self.lift_positions[self.current_lift_index]
-            self.cozmo.set_lift_height(height)
-            self.root.after(800, lambda: setattr(self, 'lift_physically_moving', False))
+        
+            try:
+                # Try move_lift with speed control
+                self.cozmo.move_lift(-2.0)  # Negative speed = down
+                self.root.after(500, lambda: self.cozmo.move_lift(0))  # Stop after 500ms
+                print("Move lift down command sent")
+            except AttributeError:
+                # Fallback to set_lift_height
+                height = self.lift_positions[self.current_lift_index]
+                self.cozmo.set_lift_height(height)
+                print(f"Set lift height to {height}")
+            except Exception as e:
+                print(f"Lower error: {e}")
+        
+            self.root.after(1000, lambda: setattr(self, 'lift_physically_moving', False))
+
+    def reset_arm(self):
+        if self.cozmo and not self.lift_physically_moving:
+            self.lift_physically_moving = True
+            self.current_lift_index = 0
+        
+            try:
+                # Move down for longer to ensure we reach bottom
+                self.cozmo.move_lift(-2.0)
+                self.root.after(1500, lambda: self.cozmo.move_lift(0))
+                print("Reset arm command sent")
+            except AttributeError:
+                self.cozmo.set_lift_height(0.0)
+                print("Reset to 0.0")
+            except Exception as e:
+                print(f"Reset error: {e}")
+        
+            self.root.after(2000, lambda: setattr(self, 'lift_physically_moving', False))
 
     def reset_arm(self):
         if self.cozmo and not self.lift_physically_moving:
@@ -468,11 +556,18 @@ class CozmoGUI:
         self.pose_label.pack(side=tk.LEFT, padx=10)
 
         # Key bindings
+        # Keep arrow keys for sharp turns
         self.root.bind('<Up>', lambda e: self.controller.drive_forward())
         self.root.bind('<Down>', lambda e: self.controller.drive_backward())
         self.root.bind('<Left>', lambda e: self.controller.turn_left())
         self.root.bind('<Right>', lambda e: self.controller.turn_right())
         self.root.bind('<KeyRelease>', lambda e: self.controller.stop())
+
+        # Add A/D for gentle arc turns (good for trailers)
+        self.root.bind('<a>', lambda e: self.controller.gentle_turn_left())
+        self.root.bind('<d>', lambda e: self.controller.gentle_turn_right())
+        self.root.bind('<q>', lambda e: self.controller.reverse_turn_left())
+        self.root.bind('<e>', lambda e: self.controller.reverse_turn_right())
         
         # Discrete head controls
         self.root.bind('<Prior>', lambda e: self.move_up())     # Page Up
@@ -480,9 +575,9 @@ class CozmoGUI:
         self.root.bind('<Home>', lambda e: self.move_center())  # Home
         
         # Arm control key bindings
-        self.root.bind('<KeyPress-r>', lambda e: self.controller.raise_arm())  # 'r' for raise
-        self.root.bind('<KeyPress-l>', lambda e: self.controller.lower_arm())  # 'l' for lower
-        self.root.bind('<KeyPress-d>', lambda e: self.controller.reset_arm())  # 'd' for down
+        self.root.bind_all('<KeyPress-r>', lambda e: self.controller.raise_arm())  # 'r' for raise
+        self.root.bind_all('<KeyPress-l>', lambda e: self.controller.lower_arm())  # 'l' for lower
+        self.root.bind_all('<KeyPress-d>', lambda e: self.controller.reset_arm())  # 'd' for down
         
         self.root.bind('<plus>', self.increase_speed)   # '+' key
         self.root.bind('<minus>', self.decrease_speed)  # '-' key
@@ -572,6 +667,7 @@ class CozmoGUI:
         
         self.root.after(500, self.update_path_display)
 
+    
     def update_battery_display(self):
         """Update the battery level graphic"""
         self.battery_canvas.delete("all")
