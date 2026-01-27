@@ -276,6 +276,88 @@ Turn curiosity into **coordinated action** across multiple robots.
 
 ---
 
+## LLM Model Strategy & Tool Calling
+
+### Current Approach (Phase 1-2): Structured JSON, No Tool Calling
+
+The system uses **Gemma 3** models which excel at instruction-following but don't support native tool/function calling:
+
+| Model | Role | Use Case |
+|-------|------|----------|
+| **Gemma 3 4B** | Fast operational | Real-time decisions, vision descriptions, observations |
+| **Gemma 3 12B QAT** | Deep analysis | Learning analysis, rule proposals, session summaries |
+
+**Why this works:**
+- `MemoryContext.build_context()` pre-gathers all relevant information
+- LLM receives rich context and returns single JSON decision
+- No back-and-forth tool calls needed
+- Simple, predictable, works with smaller local models
+
+**Current pattern:**
+```
+Rich Context In → LLM → Structured JSON Decision Out
+```
+
+### Phase 3 Consideration: Tool Calling for Coordination
+
+Multi-robot coordination may benefit from tool calling capabilities:
+- Query which robots are available
+- Check individual robot states
+- Dispatch specific tasks to specific robots
+- Coordinate complex multi-step missions
+
+**Options when we get here:**
+
+#### Option A: Add a Tool-Calling Model (Recommended)
+
+Add a third model specifically for coordination:
+
+| Model | Role |
+|-------|------|
+| Gemma 3 4B | Fast operational decisions |
+| Gemma 3 12B QAT | Deep analysis, learning |
+| **Llama 3.1 8B** or **Qwen 2.5** | Tool-calling coordinator |
+
+**Pros:** Each model does what it's trained for
+**Cons:** More models to manage, more VRAM
+
+#### Option B: Simulate Tool Calling with Gemma (No new model)
+
+Use ReAct-style prompting loop:
+```
+Prompt: "Available tools: query_robot(id), dispatch_task(id, task)..."
+Gemma: {"tool": "query_robot", "args": {"id": "scout"}}
+Code: Executes tool, returns result
+Prompt: "Result: Scout at (100,200), battery 80%. What next?"
+Gemma: {"tool": "dispatch_task", ...}
+```
+
+**Pros:** No new model needed
+**Cons:** More tokens, slower, less reliable than native tool calling
+
+### Recommendation
+
+- **Phase 1-2:** Stay with current approach (Gemma 3 family, no tool calling)
+- **Phase 3:** Evaluate whether coordination complexity justifies adding Llama 3.1 8B
+- **Decision point:** When implementing `coordination/task_dispatcher.py`
+
+### Implementation Notes for Phase 3
+
+If adding tool-calling model:
+```python
+# config.py additions
+OLLAMA_MODEL_FAST = "gemma3:4b"           # Operational
+OLLAMA_MODEL_DEEP = "gemma3:12b-qat"      # Analysis
+OLLAMA_MODEL_COORDINATOR = "llama3.1:8b"  # Tool calling (Phase 3)
+
+# New file: llm/coordinator_client.py
+# - Uses Ollama's tool calling API
+# - Manages multi-robot task dispatch
+# - Only used by central coordinator, not individual robots
+```
+
+---
+
 ## Data Flow Across Phases
 
 ### Phase 1 Data
