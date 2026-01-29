@@ -38,8 +38,8 @@ void setup() {
   Serial.begin(115200);
   delay(100);
 
-  // VL53L0X
-  Wire.begin();
+  // VL53L0X (I2C on GPIO8=SDA, GPIO9=SCL for ESP32-S3)
+  Wire.begin(8, 9);
   if (!lox.begin()) {
     Serial.println("Failed to boot VL53L0X");
     while (1);

@@ -81,22 +81,22 @@ Both sensors use I2C and share the same bus.
 | MPU6050  | 0x68        |
 
 #### VL53L0X pin mapping
-| VL53L0X Pin | ESP32 Pin | Notes |
-|-------------|-----------|-------|
-| VIN         | 3.3V      | **Do not use 5V** |
-| GND         | GND       | |
-| SDA         | SDA (GPIO21) | I2C data (shared) |
-| SCL         | SCL (GPIO22) | I2C clock (shared) |
-| XSHUT       | (optional) | Only needed for power-cycle control |
+| VL53L0X Pin | ESP32-S3 Pin | Notes |
+|-------------|--------------|-------|
+| VIN         | 3.3V         | **Do not use 5V** |
+| GND         | GND          | |
+| SDA         | GPIO8        | I2C data (shared) |
+| SCL         | GPIO9        | I2C clock (shared) |
+| XSHUT       | (optional)   | Only needed for power-cycle control |
 
 #### MPU6050 pin mapping
-| MPU6050 Pin | ESP32 Pin | Notes |
-|-------------|-----------|-------|
-| VCC         | 3.3V      | Can also use 5V if module has regulator |
-| GND         | GND       | |
-| SDA         | SDA (GPIO21) | I2C data (shared with VL53L0X) |
-| SCL         | SCL (GPIO22) | I2C clock (shared with VL53L0X) |
-| INT         | (optional) | For interrupt-driven reads |
+| MPU6050 Pin | ESP32-S3 Pin | Notes |
+|-------------|--------------|-------|
+| VCC         | 3.3V         | Can also use 5V if module has regulator |
+| GND         | GND          | |
+| SDA         | GPIO8        | I2C data (shared with VL53L0X) |
+| SCL         | GPIO9        | I2C clock (shared with VL53L0X) |
+| INT         | (optional)   | For interrupt-driven reads |
 
 > **Important:** Use **3.3V** on the VL53L0X to avoid damaging it. MPU6050 modules typically have onboard regulators and can accept 5V, but check your specific board.
 
@@ -245,8 +245,8 @@ void setup() {
   Serial.begin(115200);
   delay(100);
 
-  // VL53L0X
-  Wire.begin();
+  // VL53L0X (I2C on GPIO8=SDA, GPIO9=SCL for ESP32-S3)
+  Wire.begin(8, 9);
   if (!lox.begin()) {
     Serial.println("Failed to boot VL53L0X");
     while (1);
