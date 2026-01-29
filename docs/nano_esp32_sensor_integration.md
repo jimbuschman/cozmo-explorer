@@ -61,12 +61,14 @@ The ESP32 collects data from its ToF sensor, IMU, and the Nano, then outputs a s
 | Center | D4   | D5   |
 | Right  | D6   | D7   |
 
-#### Nano → ESP32 serial link
-| Nano Pin | ESP32 Pin | Purpose |
-|----------|-----------|---------|
-| D11 (TX) | GPIO16 (RX) | Data to ESP32 |
+#### Nano → ESP32 serial link (with voltage divider)
+| Nano Pin | ESP32-S3 Pin | Purpose |
+|----------|--------------|---------|
+| D11 (TX) | GPIO15 (RX) | Data to ESP32 (through voltage divider) |
 | D10 (RX) | GPIO17 (TX) | Not used (optional) |
-| GND      | GND        | Common ground |
+| GND      | GND         | Common ground |
+
+**Voltage divider (5V → 3.3V):** Nano D11 → 1kΩ → junction → ESP32 GPIO15, junction → 2.2kΩ → GND
 
 ---
 
@@ -85,8 +87,8 @@ Both sensors use I2C and share the same bus.
 |-------------|--------------|-------|
 | VIN         | 3.3V         | **Do not use 5V** |
 | GND         | GND          | |
-| SDA         | GPIO8        | I2C data (shared) |
-| SCL         | GPIO9        | I2C clock (shared) |
+| SDA         | GPIO4        | I2C data (shared) |
+| SCL         | GPIO5        | I2C clock (shared) |
 | XSHUT       | (optional)   | Only needed for power-cycle control |
 
 #### MPU6050 pin mapping
@@ -94,8 +96,8 @@ Both sensors use I2C and share the same bus.
 |-------------|--------------|-------|
 | VCC         | 3.3V         | Can also use 5V if module has regulator |
 | GND         | GND          | |
-| SDA         | GPIO8        | I2C data (shared with VL53L0X) |
-| SCL         | GPIO9        | I2C clock (shared with VL53L0X) |
+| SDA         | GPIO4        | I2C data (shared with VL53L0X) |
+| SCL         | GPIO5        | I2C clock (shared with VL53L0X) |
 | INT         | (optional)   | For interrupt-driven reads |
 
 > **Important:** Use **3.3V** on the VL53L0X to avoid damaging it. MPU6050 modules typically have onboard regulators and can accept 5V, but check your specific board.
@@ -245,8 +247,8 @@ void setup() {
   Serial.begin(115200);
   delay(100);
 
-  // VL53L0X (I2C on GPIO8=SDA, GPIO9=SCL for ESP32-S3)
-  Wire.begin(8, 9);
+  // VL53L0X (I2C on GPIO4=SDA, GPIO5=SCL for ESP32-S3-WROOM-1)
+  Wire.begin(4, 5);
   if (!lox.begin()) {
     Serial.println("Failed to boot VL53L0X");
     while (1);
@@ -259,8 +261,8 @@ void setup() {
     while (1);
   }
 
-  // UART to Nano
-  NanoSerial.begin(9600, SERIAL_8N1, 16, 17);
+  // UART to Nano (RX=GPIO15 for ESP32-S3-WROOM-1)
+  NanoSerial.begin(9600, SERIAL_8N1, 15, 17);
 
   // WiFi setup
   if (ENABLE_WIFI) {
@@ -552,7 +554,7 @@ python -m perception.external_sensors udp 5000
 - Try `netcat -ul 5000` to test UDP reception
 
 ### Ultrasonic readings are -1
-- Check Nano → ESP32 wiring (D11 → GPIO16)
+- Check Nano → ESP32 wiring (D11 → voltage divider → GPIO15)
 - Verify Nano is running and sending data
 - Check baud rate matches (9600)
 

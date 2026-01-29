@@ -38,8 +38,8 @@ void setup() {
   Serial.begin(115200);
   delay(100);
 
-  // VL53L0X (I2C on GPIO8=SDA, GPIO9=SCL for ESP32-S3)
-  Wire.begin(8, 9);
+  // VL53L0X (I2C on GPIO4=SDA, GPIO5=SCL for ESP32-S3-WROOM-1)
+  Wire.begin(4, 5);
   if (!lox.begin()) {
     Serial.println("Failed to boot VL53L0X");
     while (1);
@@ -52,8 +52,8 @@ void setup() {
     while (1);
   }
 
-  // UART to Nano
-  NanoSerial.begin(9600, SERIAL_8N1, 16, 17);
+  // UART to Nano (RX=GPIO15 for ESP32-S3-WROOM-1)
+  NanoSerial.begin(9600, SERIAL_8N1, 15, 17);
 
   // WiFi setup
   if (ENABLE_WIFI) {
