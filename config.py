@@ -147,6 +147,10 @@ SENSOR_GEOMETRY = {
 # When enabled, disables in-place turns and uses arc-based turns instead.
 # This prevents trailer jackknifing during turns.
 
+# Sensor dead zone - readings below this are the sensor seeing the robot structure
+# Calibrated from desk/mounted readings: ToF reads ~35mm, ultrasonics ~45mm from structure
+SENSOR_MIN_DISTANCE = 80  # mm - ignore anything closer (it's the robot itself)
+
 TRAILER_MODE = True  # Set True when Cozmo has a trailer attached
 TRAILER_ARC_RATIO = 0.5  # Default inner wheel speed ratio (0.5 = 50% of outer)
 

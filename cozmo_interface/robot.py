@@ -72,9 +72,10 @@ class SensorData:
 
     @staticmethod
     def _valid_distance(d: int) -> bool:
-        """Check if a distance reading is valid (not error/disconnected)."""
+        """Check if a distance reading is valid (not error/disconnected/structure)."""
         # -1 = disconnected, 0 = error, 8191/65535 = ToF out-of-range/error
-        return 0 < d < 5000
+        # Below SENSOR_MIN_DISTANCE = reading the robot's own structure
+        return config.SENSOR_MIN_DISTANCE < d < 5000
 
     def get_front_obstacle_distance(self) -> int:
         """Get closest obstacle distance from forward-facing sensors."""
