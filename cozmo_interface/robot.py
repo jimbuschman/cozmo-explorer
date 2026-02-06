@@ -280,7 +280,7 @@ class CozmoRobot:
             accel_xy = np.sqrt(self._sensors.accel_x**2 + self._sensors.accel_y**2)
             if self._last_accel_xy is not None:
                 accel_delta = abs(accel_xy - self._last_accel_xy)
-                if accel_delta > 800:  # Threshold for collision spike
+                if accel_delta > config.COLLISION_ACCEL_THRESHOLD:
                     self._sensors.collision_detected = True
                     logger.warning(f"COLLISION DETECTED! accel_delta={accel_delta:.1f} - Emergency stop!")
                     if self._client:

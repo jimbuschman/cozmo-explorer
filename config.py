@@ -56,6 +56,9 @@ WANDER_SPEED = 50.0  # mm/s
 TURN_SPEED = 30.0    # deg/s
 CLIFF_THRESHOLD = 10  # mm
 LOW_BATTERY_VOLTAGE = 3.4  # volts - warn below this
+COLLISION_ACCEL_THRESHOLD = 2500  # Accelerometer delta for collision detection
+                                  # Lower = more sensitive (800 too low, triggers on motor noise)
+                                  # Higher = only real impacts detected
 
 # LLM query settings
 LLM_QUERY_INTERVAL = 30.0  # seconds between "what should I do?" queries (Phase 2+)

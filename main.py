@@ -324,6 +324,7 @@ class CozmoExplorer:
             logger.info("Vision observer started - capturing images every 20s")
 
             # Main monitoring loop
+            last_status_time = datetime.now()
             while self._running:
                 await asyncio.sleep(0.5)
 
@@ -349,9 +350,11 @@ class CozmoExplorer:
                     # Will be handled by pause/resume in state machine
                     pass
 
-                # Periodic status
-                if self.state_machine.context.exploration_time % 30 < 0.5:
+                # Periodic status (every 30 seconds)
+                now = datetime.now()
+                if (now - last_status_time).total_seconds() >= 30:
                     self._print_status()
+                    last_status_time = now
 
         except asyncio.CancelledError:
             logger.info("Run loop cancelled")
