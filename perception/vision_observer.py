@@ -114,7 +114,7 @@ class VisionObserver:
         if config.LIFT_FOR_CAMERA:
             try:
                 await self.robot.set_lift_height(1.0)
-                await asyncio.sleep(0.5)  # Wait for lift to raise
+                await asyncio.sleep(1.0)  # Wait for lift to fully raise (32mm -> 92mm)
             except Exception as e:
                 logger.debug(f"Could not raise lift: {e}")
 
@@ -127,7 +127,7 @@ class VisionObserver:
         # Adjust head to look forward before capturing
         try:
             await self.robot.set_head_angle(self.capture_head_angle)
-            await asyncio.sleep(0.3)  # Wait for head to move
+            await asyncio.sleep(0.5)  # Wait for head to settle
         except Exception as e:
             logger.debug(f"Could not set head angle: {e}")
 

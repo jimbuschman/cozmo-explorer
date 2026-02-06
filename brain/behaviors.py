@@ -586,7 +586,7 @@ class WanderBehavior(Behavior):
             # Raise lift to clear sensor pod from camera view (if needed)
             if config.LIFT_FOR_CAMERA:
                 await self.robot.set_lift_height(1.0)
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(1.0)  # Wait for lift to fully raise
 
             image = await self.robot.capture_image()
 

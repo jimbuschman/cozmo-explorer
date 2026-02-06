@@ -611,7 +611,11 @@ class CozmoRobot:
 
     async def capture_image(self) -> Optional[Image.Image]:
         """
-        Capture a single camera frame.
+        Capture a fresh camera frame.
+
+        Clears the previous frame and waits for a new one to arrive,
+        ensuring the image reflects the current camera view (not a stale frame
+        from before the lift was raised, etc.).
 
         Returns:
             PIL Image or None if not available
@@ -619,8 +623,14 @@ class CozmoRobot:
         if pycozmo and self._client:
             # Enable camera if not already
             self._client.enable_camera(enable=True, color=True)
-            # Wait a bit for image
-            await asyncio.sleep(0.1)
+            # Clear stale frame so we wait for a fresh one
+            self._last_image = None
+            # Wait for a new frame to arrive (camera runs ~15fps, so ~70ms per frame)
+            for _ in range(10):  # Up to 1 second
+                await asyncio.sleep(0.1)
+                if self._last_image is not None:
+                    return self._last_image
+            logger.warning("Timed out waiting for fresh camera frame")
             return self._last_image
         else:
             # Return a dummy image in simulation
