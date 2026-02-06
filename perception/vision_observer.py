@@ -110,6 +110,14 @@ class VisionObserver:
 
     async def _capture_and_analyze(self):
         """Capture an image and analyze it with LLaVA"""
+        # Raise lift to clear the sensor pod from camera view (if needed)
+        if config.LIFT_FOR_CAMERA:
+            try:
+                await self.robot.set_lift_height(1.0)
+                await asyncio.sleep(0.5)  # Wait for lift to raise
+            except Exception as e:
+                logger.debug(f"Could not raise lift: {e}")
+
         # Turn on headlight for better lighting
         try:
             await self.robot.set_head_light(True)
@@ -131,6 +139,14 @@ class VisionObserver:
             await self.robot.set_head_light(False)
         except Exception as e:
             logger.debug(f"Could not turn off headlight: {e}")
+
+        # Lower lift back down before moving (if it was raised)
+        if config.LIFT_FOR_CAMERA:
+            try:
+                await self.robot.set_lift_height(0.0)
+                await asyncio.sleep(0.3)  # Wait for lift to lower
+            except Exception as e:
+                logger.debug(f"Could not lower lift: {e}")
 
         if not raw_image:
             logger.debug("No image captured")

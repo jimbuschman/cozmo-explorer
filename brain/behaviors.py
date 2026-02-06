@@ -543,6 +543,7 @@ class WanderBehavior(Behavior):
     async def _capture_action_image(self, action_type: str, phase: str) -> Optional[str]:
         """
         Capture an image during an action for learning data.
+        Raises lift to clear sensor pod from camera view, then lowers it.
 
         Args:
             action_type: Type of action (e.g., "escape_stall", "escape_cliff")
@@ -552,7 +553,17 @@ class WanderBehavior(Behavior):
             Path to saved image, or None if capture failed
         """
         try:
+            # Raise lift to clear sensor pod from camera view (if needed)
+            if config.LIFT_FOR_CAMERA:
+                await self.robot.set_lift_height(1.0)
+                await asyncio.sleep(0.3)
+
             image = await self.robot.capture_image()
+
+            # Lower lift back down (if it was raised)
+            if config.LIFT_FOR_CAMERA:
+                await self.robot.set_lift_height(0.0)
+
             if image is None:
                 return None
 

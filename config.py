@@ -47,6 +47,10 @@ TOKEN_BUDGET = 32000
 COZMO_LOG_LEVEL = "INFO"
 ENABLE_VOICE = True  # TTS enabled - audio truncated to 2s max for pycozmo buffer
 
+# Lift-for-camera: raise lift before image capture to clear sensor pod from view.
+# Only needed if sensors are mounted in front of the camera. Set False if camera is unobstructed.
+LIFT_FOR_CAMERA = True
+
 # Behavior settings
 WANDER_SPEED = 50.0  # mm/s
 TURN_SPEED = 30.0    # deg/s

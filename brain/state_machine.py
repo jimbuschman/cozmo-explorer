@@ -598,7 +598,10 @@ Respond with just the observation text, no commands or suggestions."""
                 description=goal_desc,
                 goal_type="explore"
             ))
-            await self._change_state(RobotState.EXPLORING)
+
+        # Transition to the state matching the current goal
+        if self.context.current_goal is not None:
+            await self._change_state(self._goal_to_state(self.context.current_goal))
 
     async def _do_explore(self):
         """Exploration state - wander and discover"""
