@@ -99,6 +99,10 @@ class VisionObserver:
 
     async def _observe_loop(self):
         """Main observation loop"""
+        # Wait before first capture to let system stabilize
+        # (lift motor current spike on startup can drop voltage and kill WiFi)
+        await asyncio.sleep(30.0)
+
         while self._running:
             if self.enabled:
                 try:
