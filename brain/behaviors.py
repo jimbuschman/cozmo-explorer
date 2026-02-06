@@ -505,13 +505,9 @@ class WanderBehavior(Behavior):
             await asyncio.sleep(straight_backup)
             await self.robot.stop()
 
-            # Step 2: Forward arc turn to change direction (safe for trailer)
-            arc_ratio = config.ARC_RATIOS.get(arc_ratio_name, config.TRAILER_ARC_RATIO)
-            arc_duration = abs(angle) / 30.0 * 1.5  # Longer arc for trailer
-            if angle > 0:
-                await self.robot.arc_turn_left(escape_speed, arc_ratio, arc_duration)
-            else:
-                await self.robot.arc_turn_right(escape_speed, arc_ratio, arc_duration)
+            # Step 2: Point turn to actually change direction
+            await self.robot.turn(angle)
+            await asyncio.sleep(0.3)
         else:
             # Normal mode: back up straight then turn
             await self.robot.drive(-self.speed, duration=backup_duration)
