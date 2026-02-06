@@ -75,7 +75,7 @@ class VisionObserver:
 
         # Head angle for looking forward (radians)
         # Range: -0.44 (down) to 0.78 (up), 0.0 = straight ahead
-        self.capture_head_angle = 0.35  # Look up/forward to see environment
+        self.capture_head_angle = 0.65  # Look up to see past sensor pod wires
 
     async def start(self):
         """Start the vision observer background task"""
