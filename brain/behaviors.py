@@ -222,7 +222,7 @@ class WanderBehavior(Behavior):
                 return BehaviorResult(BehaviorStatus.INTERRUPTED, "Robot picked up")
 
             # Check tilt from external IMU
-            if has_distance_sensors and (abs(sensors.ext_pitch) > 20 or abs(sensors.ext_roll) > 20):
+            if has_distance_sensors and (abs(sensors.ext_pitch) > 35 or abs(sensors.ext_roll) > 35):
                 logger.warning(f"Tilt detected: pitch={sensors.ext_pitch:.1f}° roll={sensors.ext_roll:.1f}°")
                 await self.robot.stop()
                 await asyncio.sleep(0.5)
