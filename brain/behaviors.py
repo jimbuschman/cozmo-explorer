@@ -328,10 +328,9 @@ class WanderBehavior(Behavior):
 
     async def _escape_cliff(self):
         """Escape from cliff detection - back up and turn away"""
-        # Capture image before action (what did we encounter?)
+        # Skip escape images to save battery (lift cycling is expensive)
+        # Sensor snapshots still capture all the important data
         before_image_path = None
-        if self.experience_logger:
-            before_image_path = await self._capture_action_image("escape_cliff", "before")
 
         # Log sensor snapshot before action
         snapshot_id = None
@@ -409,8 +408,7 @@ class WanderBehavior(Behavior):
 
         # Log outcome (assume success if we get here without another cliff)
         if self.experience_logger and action_id:
-            # Capture image after action (what do we see now?)
-            after_image_path = await self._capture_action_image("escape_cliff", "after")
+            after_image_path = None  # Skip to save battery
 
             post_snapshot_id = self.experience_logger.log_sensor_snapshot_from_robot(
                 self.robot, image_path=after_image_path
@@ -436,10 +434,8 @@ class WanderBehavior(Behavior):
 
     async def _escape_stall(self):
         """Escape from stall/collision - back up and turn away"""
-        # Capture image before action (what did we hit?)
+        # Skip escape images to save battery (lift cycling is expensive)
         before_image_path = None
-        if self.experience_logger:
-            before_image_path = await self._capture_action_image("escape_stall", "before")
 
         # Log sensor snapshot before action
         snapshot_id = None
@@ -520,8 +516,7 @@ class WanderBehavior(Behavior):
             # Brief pause to check result
             await asyncio.sleep(0.2)
 
-            # Capture image after action (what do we see now?)
-            after_image_path = await self._capture_action_image("escape_stall", "after")
+            after_image_path = None  # Skip to save battery
 
             post_snapshot_id = self.experience_logger.log_sensor_snapshot_from_robot(
                 self.robot, image_path=after_image_path

@@ -222,7 +222,7 @@ class CozmoExplorer:
             robot=self.robot,
             llm_client=self.llm,
             experience_db=self.experiences,
-            capture_interval=20.0,  # Capture every 20 seconds
+            capture_interval=45.0,  # Capture every 45 seconds (battery saving)
             enabled=True,
             save_images=True  # Save images to data/images/
         )
