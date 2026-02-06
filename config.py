@@ -52,8 +52,9 @@ ENABLE_VOICE = True  # TTS enabled - audio truncated to 2s max for pycozmo buffe
 LIFT_FOR_CAMERA = True
 
 # Behavior settings
-WANDER_SPEED = 50.0  # mm/s
+WANDER_SPEED = 70.0  # mm/s (increased for trailer drag)
 TURN_SPEED = 30.0    # deg/s
+ESCAPE_SPEED = 100.0 # mm/s for escape maneuvers (needs more power to back out with trailer)
 CLIFF_THRESHOLD = 10  # mm
 LOW_BATTERY_VOLTAGE = 3.4  # volts - warn below this
 COLLISION_ACCEL_THRESHOLD = 2500  # Accelerometer delta for collision detection

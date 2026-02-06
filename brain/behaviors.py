@@ -238,13 +238,17 @@ class WanderBehavior(Behavior):
                 if 0 < front_dist < self.DANGER_DISTANCE:
                     logger.warning(f"Obstacle at {front_dist}mm, emergency reverse")
                     await self.robot.stop()
-                    await self.robot.drive(-self.speed, duration=0.5)
-                    await asyncio.sleep(0.5)
+                    escape_speed = config.ESCAPE_SPEED
+                    backup_time = 1.0 if config.TRAILER_MODE else 0.5
+                    await self.robot.drive(-escape_speed, duration=backup_time)
+                    await asyncio.sleep(backup_time)
                     turn_angle = self._pick_turn_direction(left_dist, right_dist, 90)
                     await self.robot.turn(turn_angle)
+                    sensors.collision_detected = False  # Clear flag from maneuver
                     turns_made += 1
-                    elapsed += 1.5
+                    elapsed += backup_time + 1.0
                     last_pose_x, last_pose_y = self.robot.pose.x, self.robot.pose.y
+                    stall_check_count = 0
                     continue
 
                 # Caution zone - turn away
@@ -271,9 +275,9 @@ class WanderBehavior(Behavior):
                 is_stalled = True
                 logger.info("Collision detected")
                 sensors.collision_detected = False
-            elif stall_check_count > 5 and movement < 5.0:
+            elif stall_check_count > 12 and movement < 5.0:
                 is_stalled = True
-                logger.info(f"Stall detected, movement={movement:.1f}mm")
+                logger.info(f"Stall detected, movement={movement:.1f}mm over {stall_check_count} checks")
 
             if is_stalled:
                 await self._escape_stall()
@@ -284,7 +288,7 @@ class WanderBehavior(Behavior):
                 continue
 
             stall_check_count += 1
-            if stall_check_count > 8:
+            if stall_check_count > 18:
                 last_pose_x, last_pose_y = current_x, current_y
                 stall_check_count = 0
 
@@ -377,18 +381,31 @@ class WanderBehavior(Behavior):
         await self.robot.stop()
 
         if config.TRAILER_MODE:
-            # Use reverse arc turn for trailer - combines backup and turn
+            # Trailer escape: back up STRAIGHT first to clear cliff,
+            # then forward arc turn to change direction (trailer-safe)
+            escape_speed = config.ESCAPE_SPEED
+            straight_backup = backup_duration + 0.8  # Back up extra far from cliff
+
+            # Step 1: Straight reverse away from cliff
+            await self.robot.drive(-escape_speed, duration=straight_backup)
+            await asyncio.sleep(straight_backup)
+            await self.robot.stop()
+
+            # Step 2: Forward arc turn to new direction (safe for trailer)
             arc_ratio = config.ARC_RATIOS.get(arc_ratio_name, config.TRAILER_ARC_RATIO)
-            # Reverse arc turns the trailer while backing up
+            arc_duration = abs(angle) / 30.0 * 1.5
             if angle > 0:
-                await self.robot.reverse_arc_turn_right(self.speed, arc_ratio, backup_duration + 0.5)
+                await self.robot.arc_turn_left(escape_speed, arc_ratio, arc_duration)
             else:
-                await self.robot.reverse_arc_turn_left(self.speed, arc_ratio, backup_duration + 0.5)
+                await self.robot.arc_turn_right(escape_speed, arc_ratio, arc_duration)
         else:
             # Normal mode: back up straight then turn
             await self.robot.drive(-self.speed, duration=backup_duration)
             await asyncio.sleep(backup_duration)
             await self.robot.turn(angle)
+
+        # Clear collision flag so escape maneuver itself doesn't re-trigger
+        self.robot.sensors.collision_detected = False
 
         # Log outcome (assume success if we get here without another cliff)
         if self.experience_logger and action_id:
@@ -472,18 +489,31 @@ class WanderBehavior(Behavior):
         await self.robot.stop()
 
         if config.TRAILER_MODE:
-            # Use reverse arc turn for trailer - combines backup and turn
+            # Trailer escape: back up STRAIGHT first to clear obstacle,
+            # then forward arc turn to change direction (trailer-safe)
+            escape_speed = config.ESCAPE_SPEED  # Use at least 80mm/s for escapes
+            straight_backup = backup_duration + 0.5  # Back up longer to clear trailer
+
+            # Step 1: Straight reverse to clear the obstacle
+            await self.robot.drive(-escape_speed, duration=straight_backup)
+            await asyncio.sleep(straight_backup)
+            await self.robot.stop()
+
+            # Step 2: Forward arc turn to change direction (safe for trailer)
             arc_ratio = config.ARC_RATIOS.get(arc_ratio_name, config.TRAILER_ARC_RATIO)
-            # Reverse arc turns the trailer while backing up
+            arc_duration = abs(angle) / 30.0 * 1.5  # Longer arc for trailer
             if angle > 0:
-                await self.robot.reverse_arc_turn_right(self.speed, arc_ratio, backup_duration + 0.3)
+                await self.robot.arc_turn_left(escape_speed, arc_ratio, arc_duration)
             else:
-                await self.robot.reverse_arc_turn_left(self.speed, arc_ratio, backup_duration + 0.3)
+                await self.robot.arc_turn_right(escape_speed, arc_ratio, arc_duration)
         else:
             # Normal mode: back up straight then turn
             await self.robot.drive(-self.speed, duration=backup_duration)
             await asyncio.sleep(backup_duration)
             await self.robot.turn(angle)
+
+        # Clear collision flag so escape maneuver itself doesn't re-trigger
+        self.robot.sensors.collision_detected = False
 
         # Log outcome - check if we're still stuck after the maneuver
         if self.experience_logger and action_id:
