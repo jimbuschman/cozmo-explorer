@@ -118,11 +118,11 @@ class VisionObserver:
             except Exception as e:
                 logger.debug(f"Could not raise lift: {e}")
 
-        # Headlight disabled to save battery
-        # try:
-        #     await self.robot.set_head_light(True)
-        # except Exception as e:
-        #     logger.debug(f"Could not turn on headlight: {e}")
+        # Turn on headlight for better lighting
+        try:
+            await self.robot.set_head_light(True)
+        except Exception as e:
+            logger.debug(f"Could not turn on headlight: {e}")
 
         # Adjust head to look forward before capturing
         try:
@@ -134,11 +134,11 @@ class VisionObserver:
         # Capture image (get both raw and base64)
         raw_image = await self.camera.capture()
 
-        # Headlight disabled to save battery
-        # try:
-        #     await self.robot.set_head_light(False)
-        # except Exception as e:
-        #     logger.debug(f"Could not turn off headlight: {e}")
+        # Turn off headlight after capture
+        try:
+            await self.robot.set_head_light(False)
+        except Exception as e:
+            logger.debug(f"Could not turn off headlight: {e}")
 
         # Lower lift back down before moving (if it was raised)
         if config.LIFT_FOR_CAMERA:
