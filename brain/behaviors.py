@@ -200,6 +200,8 @@ class WanderBehavior(Behavior):
         turns_made = 0
         stall_check_count = 0
         stall_imu_count = 0
+        last_yaw = self.robot.sensors.ext_yaw
+        last_front_dist = self.robot.sensors.get_front_obstacle_distance()
 
         logger.info(f"Starting wander for {self.duration}s")
         has_distance_sensors = self.robot.sensors.ext_connected
@@ -265,25 +267,30 @@ class WanderBehavior(Behavior):
             else:
                 current_speed = self.speed
 
-            # === STALL DETECTION (IMU-based) ===
+            # === STALL DETECTION (IMU yaw + distance based) ===
             is_stalled = False
             if sensors.collision_detected:
                 is_stalled = True
                 logger.info("Collision detected")
                 sensors.collision_detected = False
             elif has_distance_sensors and stall_check_count > 8:
-                # Use MPU gyro + accelerometer to detect actual movement
-                # If we're commanding drive but IMU shows no motion, we're stuck
-                gyro_activity = abs(sensors.ext_gz_dps)  # Yaw rotation
-                accel_activity = math.sqrt(sensors.ext_ax_g**2 + sensors.ext_ay_g**2)
-                # Moving robot has gyro > 2 dps or horizontal accel > 0.05g
-                if gyro_activity < 2.0 and accel_activity < 0.05:
+                # Check if yaw has changed (robot actually moving/turning)
+                current_yaw = sensors.ext_yaw
+                yaw_change = abs(current_yaw - last_yaw)
+                # Also check if front distance is changing (approaching or receding)
+                current_front = sensors.get_front_obstacle_distance()
+                dist_change = abs(current_front - last_front_dist) if last_front_dist > 0 and current_front > 0 else 999
+
+                # If yaw barely changed and distance barely changed, we're stuck
+                if yaw_change < 1.0 and dist_change < 10:
                     stall_imu_count += 1
-                    if stall_imu_count > 6:  # ~1 second of no movement
+                    if stall_imu_count > 8:  # ~1.2 seconds of no real movement
                         is_stalled = True
-                        logger.info(f"Stall detected (IMU): gyro={gyro_activity:.1f}dps accel={accel_activity:.3f}g over {stall_imu_count} checks")
+                        logger.info(f"Stall detected: yaw_change={yaw_change:.1f}° dist_change={dist_change:.0f}mm over {stall_imu_count} checks")
                 else:
                     stall_imu_count = 0
+                last_yaw = current_yaw
+                last_front_dist = current_front
 
             if is_stalled:
                 await self._escape_stall()
