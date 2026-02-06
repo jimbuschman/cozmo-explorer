@@ -528,6 +528,54 @@ class LearnedRulesStore:
 
 
 # Utility function for creating rules from LLM proposals
+def _sanitize_condition(cond: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Sanitize a rule condition, converting string category labels
+    to numeric comparisons.
+
+    The LLM sometimes outputs conditions using category labels from the
+    pattern analyzer (e.g., "very_close", "balanced") instead of numeric
+    values. This converts them back to usable numeric conditions.
+    """
+    value = cond.get("value")
+    sensor = cond.get("sensor", "")
+
+    # If the value is already numeric, it's fine
+    if isinstance(value, (int, float)):
+        return cond
+
+    # If the value is a list (for "between"), check elements
+    if isinstance(value, list):
+        return cond
+
+    # Convert string category labels to numeric conditions
+    category_map = {
+        # Front distance categories
+        "very_close": {"op": "<", "value": 100},
+        "close": {"op": "<", "value": 200},
+        "medium": {"op": "between", "value": [200, 400]},
+        "far": {"op": ">", "value": 400},
+        # Asymmetry categories - these don't map to a single sensor
+        # so we drop them (the rule needs rewriting by the LLM)
+        "balanced": None,
+        "left_closer": None,
+        "right_closer": None,
+    }
+
+    if isinstance(value, str) and value in category_map:
+        replacement = category_map[value]
+        if replacement is None:
+            logger.warning(f"Dropping condition with category label '{value}' on sensor '{sensor}'")
+            return None
+        return {
+            "sensor": sensor,
+            "op": replacement["op"],
+            "value": replacement["value"]
+        }
+
+    return cond
+
+
 def create_rule_from_proposal(proposal: Dict[str, Any]) -> LearnedRule:
     """
     Create a LearnedRule from an LLM proposal dict.
@@ -541,10 +589,15 @@ def create_rule_from_proposal(proposal: Dict[str, Any]) -> LearnedRule:
         "evidence": "Why this rule should work"
     }
     """
+    # Sanitize conditions - convert string labels to numeric comparisons
+    raw_conditions = proposal.get('conditions', [])
+    sanitized = [_sanitize_condition(c) for c in raw_conditions]
+    conditions = [c for c in sanitized if c is not None]
+
     return LearnedRule(
         name=proposal.get('name', 'unnamed_rule'),
         description=proposal.get('description', ''),
-        conditions=proposal.get('conditions', []),
+        conditions=conditions,
         action_modifier=proposal.get('action_modifier', {}),
         status='proposed',
         evidence_summary=proposal.get('evidence', '')

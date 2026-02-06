@@ -169,9 +169,9 @@ class WanderBehavior(Behavior):
     SLOW_DISTANCE = 150       # Slow down
     CAUTION_DISTANCE = 250    # Start looking for alternatives
 
-    # Default recovery angles
-    DEFAULT_STALL_ANGLES = [-120, -90, 90, 120]
-    DEFAULT_CLIFF_ANGLES = [-90, -135, 90, 135]
+    # Default recovery angles (data shows 120°+ works, 90° never succeeds with trailer)
+    DEFAULT_STALL_ANGLES = [-120, -135, 120, 135]
+    DEFAULT_CLIFF_ANGLES = [-135, -150, 135, 150]
 
     def __init__(
         self,

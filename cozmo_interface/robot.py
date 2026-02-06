@@ -70,17 +70,23 @@ class SensorData:
     ext_ts_ms: int = 0  # ESP32 timestamp
     ext_connected: bool = False
 
+    @staticmethod
+    def _valid_distance(d: int) -> bool:
+        """Check if a distance reading is valid (not error/disconnected)."""
+        # -1 = disconnected, 0 = error, 8191/65535 = ToF out-of-range/error
+        return 0 < d < 5000
+
     def get_front_obstacle_distance(self) -> int:
         """Get closest obstacle distance from forward-facing sensors."""
-        distances = [d for d in [self.ext_tof_mm, self.ext_ultra_c_mm] if d > 0]
+        distances = [d for d in [self.ext_tof_mm, self.ext_ultra_c_mm] if self._valid_distance(d)]
         return min(distances) if distances else -1
 
     def get_obstacle_distances(self) -> dict:
-        """Get all obstacle distances."""
+        """Get all obstacle distances, -1 for invalid/disconnected."""
         return {
             "front": self.get_front_obstacle_distance(),
-            "left": self.ext_ultra_l_mm,
-            "right": self.ext_ultra_r_mm,
+            "left": self.ext_ultra_l_mm if self._valid_distance(self.ext_ultra_l_mm) else -1,
+            "right": self.ext_ultra_r_mm if self._valid_distance(self.ext_ultra_r_mm) else -1,
         }
 
 
