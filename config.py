@@ -146,7 +146,7 @@ SENSOR_GEOMETRY = {
 # When enabled, disables in-place turns and uses arc-based turns instead.
 # This prevents trailer jackknifing during turns.
 
-TRAILER_MODE = False  # Set True when Cozmo has a trailer attached
+TRAILER_MODE = True  # Set True when Cozmo has a trailer attached
 TRAILER_ARC_RATIO = 0.5  # Default inner wheel speed ratio (0.5 = 50% of outer)
 
 # Learnable arc ratios - the learning system can propose rules using these
