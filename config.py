@@ -64,7 +64,7 @@ EXPERIENCE_RELEVANCE_THRESHOLD = 0.7  # similarity threshold for "seen before"
 
 # External sensor settings (ESP32 pod)
 # Mode: "serial" (USB tethered) or "udp" (WiFi wireless)
-EXT_SENSOR_MODE = "serial"  # Change to "udp" for wireless operation
+EXT_SENSOR_MODE = "udp"  # "serial" for USB tethered, "udp" for WiFi wireless
 
 # Serial mode settings
 EXT_SENSOR_PORT = "/dev/ttyUSB0"  # Linux default, use "COM3" etc on Windows
@@ -72,6 +72,66 @@ EXT_SENSOR_BAUD = 115200
 
 # UDP mode settings (for WiFi)
 EXT_SENSOR_UDP_PORT = 5000  # Port to listen on for ESP32 UDP packets
+
+# =============================================================================
+# IMU MOUNTING ORIENTATION
+# =============================================================================
+# Axis sign corrections for MPU6050 based on how the sensor pod is mounted.
+# Adjust per-robot if sensor orientation differs.
+#
+# When the sensor pod is at rest on a flat surface in its mounted position,
+# az_g should read ~+1.0g. If it reads ~-1.0g, set IMU_ACCEL_Z_SIGN = -1.0.
+# Same logic applies to X and Y axes.
+#
+# Current defaults: board mounted component-side-down (Z inverted, Y inverted)
+
+IMU_ACCEL_X_SIGN = 1.0
+IMU_ACCEL_Y_SIGN = -1.0
+IMU_ACCEL_Z_SIGN = -1.0
+
+# =============================================================================
+# SENSOR GEOMETRY (per-robot physical layout)
+# =============================================================================
+# All measurements relative to Cozmo's front-center at ground level.
+# X = forward, Y = left, Z = up. Distances in mm, angles in degrees.
+#
+# Robot dimensions (Cozmo + sensor pod + trailer):
+#   Length: ~240mm, Width: ~115mm (at front)
+#
+#            (front)
+#       UL ------- UR       Ultrasonics L/R angled 15° outward
+#           ToF              ToF center, pointing straight ahead
+#           UC               Ultrasonic center, straight ahead
+#          [COZMO]
+#           MPU              MPU6050 on Cozmo's back
+#         [TRAILER]
+#            (rear)
+
+SENSOR_GEOMETRY = {
+    "ultra_left": {
+        "height_mm": 10,         # Height off ground
+        "angle_deg": 15,         # Angled 15° outward (left)
+        "tilt_deg": 0,           # Slight upward tilt (negligible)
+    },
+    "ultra_center": {
+        "height_mm": 36.5,       # Height off ground
+        "angle_deg": 0,          # Pointing straight ahead
+        "tilt_deg": 0,
+    },
+    "ultra_right": {
+        "height_mm": 10,         # Height off ground
+        "angle_deg": -15,        # Angled 15° outward (right)
+        "tilt_deg": 0,
+    },
+    "tof": {
+        "height_mm": 62,         # Height off ground
+        "angle_deg": 0,          # Pointing straight ahead
+        "tilt_deg": 0,
+    },
+    "mpu": {
+        "distance_from_front_mm": 120,  # ~120mm back from front
+    },
+}
 
 # =============================================================================
 # TRAILER MODE

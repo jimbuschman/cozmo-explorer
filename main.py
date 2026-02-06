@@ -5,6 +5,7 @@ An autonomous exploration system for the Cozmo robot.
 """
 import asyncio
 import logging
+import math
 import os
 import signal
 import sys
@@ -195,11 +196,15 @@ class CozmoExplorer:
                 s.ext_ultra_l_mm = reading.ultra_l_mm
                 s.ext_ultra_c_mm = reading.ultra_c_mm
                 s.ext_ultra_r_mm = reading.ultra_r_mm
-                # Orientation (derived from IMU)
-                s.ext_pitch = reading.pitch
-                s.ext_roll = reading.roll
-                s.ext_yaw = reading.yaw
-                # Raw IMU data
+                # Orientation - recompute from raw accel with mounting correction
+                # (bypasses ESP32's complementary filter which drifts with inverted axes)
+                ax = reading.ax_g * config.IMU_ACCEL_X_SIGN
+                ay = reading.ay_g * config.IMU_ACCEL_Y_SIGN
+                az = reading.az_g * config.IMU_ACCEL_Z_SIGN
+                s.ext_pitch = math.atan2(ay, math.sqrt(ax * ax + az * az)) * 180.0 / math.pi
+                s.ext_roll = math.atan2(-ax, az) * 180.0 / math.pi
+                s.ext_yaw = reading.yaw  # Yaw still from ESP32 gyro integration
+                # Raw IMU data (uncorrected)
                 s.ext_ax_g = reading.ax_g
                 s.ext_ay_g = reading.ay_g
                 s.ext_az_g = reading.az_g
