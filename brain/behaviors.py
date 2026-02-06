@@ -199,8 +199,7 @@ class WanderBehavior(Behavior):
         distance_traveled = 0.0
         turns_made = 0
         stall_check_count = 0
-        last_pose_x = self.robot.pose.x
-        last_pose_y = self.robot.pose.y
+        stall_imu_count = 0
 
         logger.info(f"Starting wander for {self.duration}s")
         has_distance_sensors = self.robot.sensors.ext_connected
@@ -266,31 +265,35 @@ class WanderBehavior(Behavior):
             else:
                 current_speed = self.speed
 
-            # === REACTIVE COLLISION DETECTION (fallback) ===
-            current_x, current_y = self.robot.pose.x, self.robot.pose.y
-            movement = math.sqrt((current_x - last_pose_x)**2 + (current_y - last_pose_y)**2)
-
+            # === STALL DETECTION (IMU-based) ===
             is_stalled = False
             if sensors.collision_detected:
                 is_stalled = True
                 logger.info("Collision detected")
                 sensors.collision_detected = False
-            elif stall_check_count > 12 and movement < 5.0:
-                is_stalled = True
-                logger.info(f"Stall detected, movement={movement:.1f}mm over {stall_check_count} checks")
+            elif has_distance_sensors and stall_check_count > 8:
+                # Use MPU gyro + accelerometer to detect actual movement
+                # If we're commanding drive but IMU shows no motion, we're stuck
+                gyro_activity = abs(sensors.ext_gz_dps)  # Yaw rotation
+                accel_activity = math.sqrt(sensors.ext_ax_g**2 + sensors.ext_ay_g**2)
+                # Moving robot has gyro > 2 dps or horizontal accel > 0.05g
+                if gyro_activity < 2.0 and accel_activity < 0.05:
+                    stall_imu_count += 1
+                    if stall_imu_count > 6:  # ~1 second of no movement
+                        is_stalled = True
+                        logger.info(f"Stall detected (IMU): gyro={gyro_activity:.1f}dps accel={accel_activity:.3f}g over {stall_imu_count} checks")
+                else:
+                    stall_imu_count = 0
 
             if is_stalled:
                 await self._escape_stall()
                 turns_made += 1
                 elapsed += 1.5
                 stall_check_count = 0
-                last_pose_x, last_pose_y = self.robot.pose.x, self.robot.pose.y
+                stall_imu_count = 0
                 continue
 
             stall_check_count += 1
-            if stall_check_count > 18:
-                last_pose_x, last_pose_y = current_x, current_y
-                stall_check_count = 0
 
             # === RANDOM EXPLORATION ===
             if random.random() < self.turn_probability:
