@@ -598,10 +598,12 @@ class CozmoRobot:
         Set lift height.
 
         Args:
-            height: Height ratio (0.0 to 1.0)
+            height: Height ratio (0.0 = fully lowered, 1.0 = fully raised)
         """
         if pycozmo and self._client:
-            self._client.set_lift_height(height)
+            # pycozmo expects millimeters (32mm min to 92mm max)
+            height_mm = 32.0 + max(0.0, min(1.0, height)) * (92.0 - 32.0)
+            self._client.set_lift_height(height_mm)
         else:
             logger.debug(f"SIM: lift_height={height}")
 
