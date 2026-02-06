@@ -66,5 +66,7 @@ void loop() {
   Serial.print(" R:");
   Serial.println(R);
 
-  delay(100);
+  // Reduced delay - the 30ms between sensor reads + serial transmit time
+  // already creates ~150ms cycle. Keep short to feed ESP32 more often.
+  delay(20);
 }

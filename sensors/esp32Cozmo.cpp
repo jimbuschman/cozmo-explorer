@@ -34,6 +34,13 @@ const float alpha = 0.98;  // complementary filter constant
 
 bool wifiConnected = false;
 
+// --- Non-blocking Nano serial buffer ---
+char nanoBuf[256];
+int nanoBufIdx = 0;
+long lastUltraL = -1, lastUltraC = -1, lastUltraR = -1;
+unsigned long lastNanoData = 0;  // timestamp of last valid Nano packet
+const unsigned long NANO_TIMEOUT_MS = 2000;  // mark disconnected after 2s
+
 void setup() {
   Serial.begin(115200);
   delay(100);
@@ -109,10 +116,15 @@ void setup() {
 }
 
 void loop() {
-  // Read VL53L0X
+  // Read VL53L0X with plausibility check
   VL53L0X_RangingMeasurementData_t measure;
   lox.rangingTest(&measure, false);
-  long tofDist = (measure.RangeStatus != 4) ? measure.RangeMilliMeter : -1;
+  long tofDist;
+  if (measure.RangeStatus != 4 && measure.RangeMilliMeter > 0 && measure.RangeMilliMeter < 4000) {
+    tofDist = measure.RangeMilliMeter;
+  } else {
+    tofDist = -1;
+  }
 
   // Read MPU6050
   int16_t ax, ay, az, gx, gy, gz;
@@ -148,33 +160,56 @@ void loop() {
   // Yaw integration (drifts over time)
   yaw += gz_dps * dt;
 
-  // Read Nano serial data
-  long L = -1, C = -1, R = -1;
-  if (NanoSerial.available()) {
-    String line = NanoSerial.readStringUntil('\n');
-    line.trim();
+  // --- Non-blocking Nano serial read ---
+  // Read available bytes into buffer without blocking
+  while (NanoSerial.available()) {
+    char c = NanoSerial.read();
+    if (c == '\n') {
+      // Complete line received - parse it
+      nanoBuf[nanoBufIdx] = '\0';
+      String line = String(nanoBuf);
+      nanoBufIdx = 0;
 
-    if (line.length() > 0) {
-      int idxL = line.indexOf("ultra_l_mm");
-      int idxC = line.indexOf("ultra_c_mm");
-      int idxR = line.indexOf("ultra_r_mm");
+      if (line.length() > 0) {
+        int idxL = line.indexOf("ultra_l_mm");
+        int idxC = line.indexOf("ultra_c_mm");
+        int idxR = line.indexOf("ultra_r_mm");
 
-      if (idxL >= 0) {
-        int start = line.indexOf(":", idxL) + 1;
-        int end = line.indexOf(",", idxL);
-        L = line.substring(start, end).toInt();
+        if (idxL >= 0) {
+          int start = line.indexOf(":", idxL) + 1;
+          int end = line.indexOf(",", idxL);
+          lastUltraL = line.substring(start, end).toInt();
+        }
+        if (idxC >= 0) {
+          int start = line.indexOf(":", idxC) + 1;
+          int end = line.indexOf(",", idxC);
+          lastUltraC = line.substring(start, end).toInt();
+        }
+        if (idxR >= 0) {
+          int start = line.indexOf(":", idxR) + 1;
+          int end = line.indexOf("}", idxR);
+          lastUltraR = line.substring(start, end).toInt();
+        }
+        lastNanoData = millis();
       }
-      if (idxC >= 0) {
-        int start = line.indexOf(":", idxC) + 1;
-        int end = line.indexOf(",", idxC);
-        C = line.substring(start, end).toInt();
-      }
-      if (idxR >= 0) {
-        int start = line.indexOf(":", idxR) + 1;
-        int end = line.indexOf("}", idxR);
-        R = line.substring(start, end).toInt();
-      }
+    } else if (nanoBufIdx < 254) {
+      nanoBuf[nanoBufIdx++] = c;
+    } else {
+      // Buffer overflow - reset
+      nanoBufIdx = 0;
     }
+  }
+
+  // Use last valid readings, or -1 if Nano data is stale
+  long L, C, R;
+  if (millis() - lastNanoData < NANO_TIMEOUT_MS) {
+    L = lastUltraL;
+    C = lastUltraC;
+    R = lastUltraR;
+  } else {
+    L = -1;
+    C = -1;
+    R = -1;
   }
 
   // Build JSON string
