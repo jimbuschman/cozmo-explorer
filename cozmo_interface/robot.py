@@ -120,6 +120,7 @@ class CozmoRobot:
         self._connected_event = asyncio.Event()
         # For collision detection - track last horizontal accel
         self._last_accel_xy: Optional[float] = None
+        self._audio_playing: bool = False  # Suppress collision detection during audio
 
     @property
     def state(self) -> RobotState:
@@ -283,8 +284,9 @@ class CozmoRobot:
 
             # Collision detection - check for sudden horizontal acceleration spike
             # This runs every ~30ms at packet level for fast response
+            # Skip during audio playback (speaker vibration causes false positives)
             accel_xy = np.sqrt(self._sensors.accel_x**2 + self._sensors.accel_y**2)
-            if self._last_accel_xy is not None:
+            if self._last_accel_xy is not None and not self._audio_playing:
                 accel_delta = abs(accel_xy - self._last_accel_xy)
                 if accel_delta > config.COLLISION_ACCEL_THRESHOLD:
                     self._sensors.collision_detected = True
@@ -692,6 +694,9 @@ class CozmoRobot:
         """
         if pycozmo and self._client:
             try:
+                # Suppress collision detection during audio (speaker vibration causes false positives)
+                self._audio_playing = True
+
                 # Ensure volume is set
                 self._client.set_volume(50000)
 
@@ -711,6 +716,8 @@ class CozmoRobot:
                     error_log.log_error("audio", f"Failed to play audio: {wav_path}", e)
                 except:
                     pass  # Don't crash if error logging fails
+            finally:
+                self._audio_playing = False
         else:
             logger.debug(f"SIM: play_audio={wav_path}")
 

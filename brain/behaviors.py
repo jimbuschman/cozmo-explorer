@@ -244,7 +244,7 @@ class WanderBehavior(Behavior):
             else:
                 pitch_delta = 0
                 roll_delta = 0
-            if has_distance_sensors and (pitch_delta > 15 or roll_delta > 15):
+            if has_distance_sensors and (pitch_delta > 25 or roll_delta > 25):
                 logger.warning(f"Tilt detected: pitch_delta={pitch_delta:.1f}° roll_delta={roll_delta:.1f}°")
                 await self.robot.stop()
                 await asyncio.sleep(0.5)
