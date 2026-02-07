@@ -204,6 +204,7 @@ class WanderBehavior(Behavior):
         turns_made = 0
         stall_check_count = 0
         stall_imu_count = 0
+        escape_cooldown = 0.0  # Seconds to suppress frontier steering after escapes
         last_yaw = self.robot.sensors.ext_yaw
         last_front_dist = self.robot.sensors.get_front_obstacle_distance()
 
@@ -289,6 +290,7 @@ class WanderBehavior(Behavior):
                     stall_check_count = 0
                     last_yaw = self.robot.sensors.ext_yaw
                     last_front_dist = self.robot.sensors.get_front_obstacle_distance()
+                    escape_cooldown = 3.0  # Drive straight 3s before frontier steering
                     continue
 
                 # Caution zone - zigzag escape (sensor-aware forward-reverse arcs)
@@ -311,6 +313,7 @@ class WanderBehavior(Behavior):
                     stall_check_count = 0
                     last_yaw = self.robot.sensors.ext_yaw
                     last_front_dist = self.robot.sensors.get_front_obstacle_distance()
+                    escape_cooldown = 3.0
                     continue
 
                 # No speed reduction - trailer needs full speed to turn effectively
@@ -353,14 +356,20 @@ class WanderBehavior(Behavior):
                 stall_imu_count = 0
                 last_yaw = self.robot.sensors.ext_yaw
                 last_front_dist = self.robot.sensors.get_front_obstacle_distance()
+                escape_cooldown = 3.0
                 continue
 
             stall_check_count += 1
 
+            # Tick down escape cooldown
+            if escape_cooldown > 0:
+                escape_cooldown -= check_interval
+
             # === EXPLORATION (frontier-directed or random) ===
             # Only consider turning at the same rate as old random turns
+            # Skip frontier steering during escape cooldown - drive straight to clear the area
             if random.random() < self.turn_probability:
-                if self.spatial_map:
+                if self.spatial_map and escape_cooldown <= 0:
                     x, y = self.robot.pose.x, self.robot.pose.y
                     target = self.spatial_map.find_nearest_frontier(x, y, min_distance=100)
                     if target:
