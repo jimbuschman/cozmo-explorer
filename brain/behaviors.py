@@ -206,6 +206,7 @@ class WanderBehavior(Behavior):
         # Tilt baseline - will be calibrated from first real sensor reading
         baseline_pitch = None
         baseline_roll = None
+        tilt_consecutive = 0  # Consecutive high-tilt readings (filters driving acceleration spikes)
 
         logger.info(f"Starting wander for {self.duration}s")
         has_distance_sensors = self.robot.sensors.ext_connected
@@ -245,10 +246,15 @@ class WanderBehavior(Behavior):
                 pitch_delta = 0
                 roll_delta = 0
             if has_distance_sensors and (pitch_delta > 25 or roll_delta > 25):
-                logger.warning(f"Tilt detected: pitch_delta={pitch_delta:.1f}° roll_delta={roll_delta:.1f}°")
-                await self.robot.stop()
-                await asyncio.sleep(0.5)
-                continue
+                tilt_consecutive += 1
+                if tilt_consecutive >= 3:  # Need 3 consecutive readings (~0.45s) to confirm real tilt
+                    logger.warning(f"Tilt detected: pitch_delta={pitch_delta:.1f}° roll_delta={roll_delta:.1f}°")
+                    await self.robot.stop()
+                    await asyncio.sleep(0.5)
+                    tilt_consecutive = 0
+                    continue
+            else:
+                tilt_consecutive = 0
 
             # === PROACTIVE OBSTACLE AVOIDANCE ===
             if has_distance_sensors:
@@ -297,7 +303,7 @@ class WanderBehavior(Behavior):
                 is_stalled = True
                 logger.info("Collision detected")
                 sensors.collision_detected = False
-            elif has_distance_sensors and stall_check_count > 8:
+            elif has_distance_sensors and stall_check_count > 4:
                 # Check if yaw has changed (robot actually moving/turning)
                 current_yaw = sensors.ext_yaw
                 yaw_change = abs(current_yaw - last_yaw)
@@ -310,7 +316,7 @@ class WanderBehavior(Behavior):
                 # If yaw barely changed and distance barely changed, we're stuck
                 if yaw_change < 1.0 and dist_change < 10:
                     stall_imu_count += 1
-                    if stall_imu_count > 8:  # ~1.2 seconds of no real movement
+                    if stall_imu_count > 5:  # ~0.75 seconds of no real movement
                         is_stalled = True
                         logger.info(f"Stall detected: yaw_change={yaw_change:.1f}° dist_change={dist_change:.0f}mm over {stall_imu_count} checks")
                 else:
