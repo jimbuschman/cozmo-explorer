@@ -31,15 +31,20 @@ class ManeuverResult:
 
 class ZigzagManeuver:
     """
-    Sensor-aware zigzag escape: forward arc one direction, reverse arc the
-    other, repeat until front is clear or max cycles exhausted.
+    Sensor-aware zigzag escape: reverse arc away from obstacle, then forward
+    arc to reorient, repeat until front is clear or max cycles exhausted.
 
-    Each forward-reverse cycle ratchets the heading sideways - effective
-    with a trailer where single arcs barely change heading.
+    Reverse-first because the obstacle is ahead - backing up creates space
+    before trying to turn. Each reverse-forward cycle ratchets the heading
+    sideways, effective with a trailer where single arcs barely change heading.
 
     Uses set_wheels() for non-blocking wheel control so sensors can be
     polled every ZIGZAG_SENSOR_POLL seconds during arcs.
     """
+
+    # Clear threshold: well above caution distance so we don't immediately
+    # re-enter the caution zone and loop forever
+    CLEAR_DISTANCE = 350
 
     def __init__(self, robot, sensors):
         """
@@ -55,7 +60,7 @@ class ZigzagManeuver:
         Run the zigzag escape maneuver.
 
         Args:
-            direction: "left" or "right" - initial forward arc direction
+            direction: "left" or "right" - which way to turn away
 
         Returns:
             ManeuverResult with status and details
@@ -65,7 +70,7 @@ class ZigzagManeuver:
         ratio = config.ZIGZAG_ARC_RATIO
         poll = config.ZIGZAG_SENSOR_POLL
         arc_duration = config.ZIGZAG_ARC_DURATION
-        caution_dist = 250  # WanderBehavior.CAUTION_DISTANCE
+        clear_dist = self.CLEAR_DISTANCE
         danger_dist = 80    # WanderBehavior.DANGER_DISTANCE
 
         sign = 1.0 if direction == "left" else -1.0
@@ -77,7 +82,42 @@ class ZigzagManeuver:
                 logger.debug(f"Zigzag cycle {cycle+1}/{config.ZIGZAG_MAX_CYCLES}, "
                              f"arc_duration={arc_duration:.1f}s")
 
-                # === Phase 1: Forward arc in chosen direction ===
+                # === Phase 1: Reverse arc AWAY from obstacle ===
+                # Back up while turning - creates space and starts heading change
+                if sign > 0:
+                    # Turn left: reverse-right (right wheel faster backward)
+                    left_speed = -speed * ratio
+                    right_speed = -speed
+                else:
+                    # Turn right: reverse-left (left wheel faster backward)
+                    left_speed = -speed
+                    right_speed = -speed * ratio
+
+                await self.robot.set_wheels(left_speed, right_speed)
+
+                phase_elapsed = 0.0
+                while phase_elapsed < arc_duration:
+                    await asyncio.sleep(poll)
+                    phase_elapsed += poll
+
+                    front = self.sensors.get_front_obstacle_distance()
+                    if front > clear_dist or front < 0:
+                        await self.robot.stop()
+                        elapsed = time.monotonic() - start_time
+                        logger.info(f"Zigzag SUCCESS: clear after cycle {cycle+1} "
+                                    f"rev phase, front={front}mm, {elapsed:.1f}s")
+                        return ManeuverResult(
+                            ManeuverStatus.SUCCESS,
+                            f"Clear after {cycle+1} cycles (rev), front={front}mm",
+                            cycles_used=cycle + 1,
+                            duration=elapsed,
+                        )
+
+                await self.robot.stop()
+                await asyncio.sleep(0.05)  # Brief pause between phases
+
+                # === Phase 2: Forward arc to reorient ===
+                # Drive forward in the turn direction to complete heading change
                 if sign > 0:
                     left_speed = speed * ratio
                     right_speed = speed
@@ -93,8 +133,7 @@ class ZigzagManeuver:
                     phase_elapsed += poll
 
                     front = self.sensors.get_front_obstacle_distance()
-                    if front > caution_dist or front < 0:
-                        # Clear! (or no sensor data, treat as clear)
+                    if front > clear_dist or front < 0:
                         await self.robot.stop()
                         elapsed = time.monotonic() - start_time
                         logger.info(f"Zigzag SUCCESS: clear after cycle {cycle+1} "
@@ -106,43 +145,10 @@ class ZigzagManeuver:
                             duration=elapsed,
                         )
                     if 0 < front < danger_dist:
-                        # Too close - abort this forward phase early
+                        # Getting too close - abort forward phase early
                         logger.debug(f"Zigzag: front={front}mm < danger, "
                                      f"aborting fwd phase early")
                         break
-
-                await self.robot.stop()
-                await asyncio.sleep(0.05)  # Brief pause between phases
-
-                # === Phase 2: Reverse arc in OPPOSITE direction ===
-                if sign > 0:
-                    # Was going forward-left, now reverse-right
-                    left_speed = -speed
-                    right_speed = -speed * ratio
-                else:
-                    # Was going forward-right, now reverse-left
-                    left_speed = -speed * ratio
-                    right_speed = -speed
-
-                await self.robot.set_wheels(left_speed, right_speed)
-
-                phase_elapsed = 0.0
-                while phase_elapsed < arc_duration:
-                    await asyncio.sleep(poll)
-                    phase_elapsed += poll
-
-                    front = self.sensors.get_front_obstacle_distance()
-                    if front > caution_dist or front < 0:
-                        await self.robot.stop()
-                        elapsed = time.monotonic() - start_time
-                        logger.info(f"Zigzag SUCCESS: clear after cycle {cycle+1} "
-                                    f"rev phase, front={front}mm, {elapsed:.1f}s")
-                        return ManeuverResult(
-                            ManeuverStatus.SUCCESS,
-                            f"Clear after {cycle+1} cycles (rev), front={front}mm",
-                            cycles_used=cycle + 1,
-                            duration=elapsed,
-                        )
 
                 await self.robot.stop()
                 await asyncio.sleep(0.05)

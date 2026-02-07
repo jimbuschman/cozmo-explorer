@@ -18,6 +18,12 @@ ROBOT_WIDTH = 115.0      # Robot body width
 TRAILER_WIDTH = 100.0    # Trailer body width
 JACKKNIFE_LIMIT = math.radians(60)  # Max hitch angle
 
+# Trailer drag: the trailer's ground friction resists heading changes.
+# Higher = trailer straightens the path more = harder to turn (matching reality).
+# 0.0 = no drag (free-spinning trailer), 1.0 = heavy drag.
+# Tuned so arc turns change heading ~20-30 degrees instead of 60+ (matching sessions 56-57).
+TRAILER_DRAG = 0.6
+
 
 class RobotTrailerState:
     """Full kinematic state of the robot-trailer system."""
@@ -101,7 +107,9 @@ def step(state: RobotTrailerState, dt: float):
     """
     Advance the kinematic state by dt seconds (Euler integration).
 
-    Updates state in-place.
+    Includes trailer drag: the trailer's ground friction creates a torque
+    through the hitch that opposes the robot's turn, straightening the path.
+    This is why arc turns barely change heading on the real robot.
     """
     v_left = state.left_speed
     v_right = state.right_speed
@@ -109,6 +117,14 @@ def step(state: RobotTrailerState, dt: float):
     # Differential drive kinematics
     v = (v_left + v_right) / 2.0            # Forward velocity
     omega = (v_right - v_left) / TRACK_WIDTH  # Angular velocity
+
+    # Trailer drag: lateral force from trailer through hitch opposes the turn.
+    # When the hitch angle is non-zero and the robot is moving, the trailer
+    # pulls back toward straight, reducing effective angular velocity.
+    phi = state.trailer_phi
+    if abs(v) > 0.1:
+        drag_torque = TRAILER_DRAG * v * math.sin(phi) / ROBOT_LENGTH
+        omega -= drag_torque * dt
 
     # Update robot pose
     state.x += v * math.cos(state.theta) * dt
@@ -119,7 +135,6 @@ def step(state: RobotTrailerState, dt: float):
     state.theta = (state.theta + math.pi) % (2 * math.pi) - math.pi
 
     # Trailer follows (bicycle model for single-axle trailer)
-    phi = state.trailer_phi
     if abs(v) > 0.1 or abs(omega) > 0.1:  # Only update if moving
         phi_dot = (v * math.sin(phi) / TRAILER_LENGTH) - \
                   (omega * ROBOT_LENGTH * math.cos(phi) / TRAILER_LENGTH)
