@@ -217,30 +217,54 @@ async def run_simulation(args):
     # Pattern analyzer
     pattern_analyzer = PatternAnalyzer(experience_logger)
 
-    # --- LLM client (optional) ---
-    llm_client = None
+    # --- LLM clients (optional) ---
+    # Observer client: default local model (cheap journal entries)
+    # Analysis client: --llm-model (smarter model for learning proposals)
+    observer_llm = None
+    analysis_llm = None
     if not args.no_llm:
+        from llm.client import LLMClient
+        llm_host = args.llm_host or config.OLLAMA_HOST
+
+        # Observer LLM (local default model for journaling)
         try:
-            from llm.client import LLMClient
-            llm_host = args.llm_host or config.OLLAMA_HOST
-            llm_model = args.llm_model or config.OLLAMA_MODEL
-            llm_client = LLMClient(host=llm_host, model=llm_model)
-            await llm_client.connect()
-            if await llm_client.health_check():
-                logger.info(f"LLM ready: {llm_model} at {llm_host}")
+            observer_llm = LLMClient(host=llm_host, model=config.OLLAMA_MODEL)
+            await observer_llm.connect()
+            if await observer_llm.health_check():
+                logger.info(f"Observer LLM ready: {config.OLLAMA_MODEL}")
             else:
-                logger.warning("LLM not available - falling back to statistical proposals")
-                await llm_client.close()
-                llm_client = None
+                logger.warning("Observer LLM not available")
+                await observer_llm.close()
+                observer_llm = None
         except Exception as e:
-            logger.warning(f"LLM init failed: {e} - statistical proposals only")
-            llm_client = None
+            logger.warning(f"Observer LLM init failed: {e}")
+            observer_llm = None
+
+        # Analysis LLM (bigger model for learning proposals)
+        analysis_model = args.llm_model or config.OLLAMA_MODEL
+        if analysis_model == config.OLLAMA_MODEL and observer_llm:
+            # Same model - reuse the client
+            analysis_llm = observer_llm
+            logger.info(f"Analysis LLM: reusing observer ({analysis_model})")
+        else:
+            try:
+                analysis_llm = LLMClient(host=llm_host, model=analysis_model)
+                await analysis_llm.connect()
+                if await analysis_llm.health_check():
+                    logger.info(f"Analysis LLM ready: {analysis_model}")
+                else:
+                    logger.warning(f"Analysis LLM ({analysis_model}) not available - falling back to statistical")
+                    await analysis_llm.close()
+                    analysis_llm = None
+            except Exception as e:
+                logger.warning(f"Analysis LLM init failed: {e} - statistical proposals only")
+                analysis_llm = None
     else:
         logger.info("LLM disabled (--no-llm)")
 
-    # --- Learning coordinator ---
+    # --- Learning coordinator (uses analysis LLM) ---
     learning_coordinator = LearningCoordinator(
-        llm_client=llm_client,
+        llm_client=analysis_llm,
         experience_logger=experience_logger,
         pattern_analyzer=pattern_analyzer,
         rules_store=rules_store,
@@ -250,10 +274,10 @@ async def run_simulation(args):
     learning_coordinator.MIN_SAMPLES_FOR_ANALYSIS = 10
     learning_coordinator.ANALYSIS_COOLDOWN_MINUTES = max(1, learning_coordinator.ANALYSIS_COOLDOWN_MINUTES / args.time_scale)
 
-    # --- State machine ---
+    # --- State machine (observer LLM for journaling) ---
     state_machine = StateMachine(
         robot=sim_robot,
-        llm_client=llm_client,
+        llm_client=observer_llm,
         memory=None,  # No ChromaDB in sim
         spatial_map=spatial_map,
         vision_observer=None,  # No camera in sim
@@ -396,8 +420,10 @@ async def run_simulation(args):
         )
 
         # Cleanup
-        if llm_client:
-            await llm_client.close()
+        if observer_llm:
+            await observer_llm.close()
+        if analysis_llm and analysis_llm is not observer_llm:
+            await analysis_llm.close()
         experience_logger.close()
         rules_store.close()
         state_store.close()
@@ -424,7 +450,7 @@ def main():
     parser.add_argument("--llm-host", type=str, default=None,
                         help="Ollama host URL")
     parser.add_argument("--llm-model", type=str, default=None,
-                        help="Ollama model name")
+                        help="Ollama model for learning analysis (observer uses default gemma3)")
     parser.add_argument("--no-llm", action="store_true", default=False,
                         help="Disable LLM entirely")
     args = parser.parse_args()
