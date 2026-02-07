@@ -111,6 +111,7 @@ class ExperienceLogger:
         self.db_path = Path(db_path or config.SQLITE_PATH)
         self._conn: Optional[sqlite3.Connection] = None
         self._session_id: Optional[int] = None
+        self._room_id: Optional[str] = None
 
     def connect(self):
         """Connect to database and create tables"""
@@ -129,6 +130,7 @@ class ExperienceLogger:
             CREATE TABLE IF NOT EXISTS sensor_snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id INTEGER,
+                room_id TEXT,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 pose_x REAL,
                 pose_y REAL,
@@ -169,6 +171,7 @@ class ExperienceLogger:
             CREATE TABLE IF NOT EXISTS action_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id INTEGER,
+                room_id TEXT,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 action_type TEXT,
                 parameters TEXT,
@@ -183,6 +186,7 @@ class ExperienceLogger:
             CREATE TABLE IF NOT EXISTS outcome_events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id INTEGER,
+                room_id TEXT,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 action_event_id INTEGER,
                 outcome_type TEXT,
@@ -192,6 +196,13 @@ class ExperienceLogger:
                 FOREIGN KEY (sensor_snapshot_id) REFERENCES sensor_snapshots(id)
             )
         """)
+
+        # Migrate existing tables: add room_id column if missing
+        for table in ('sensor_snapshots', 'action_events', 'outcome_events'):
+            try:
+                cursor.execute(f"ALTER TABLE {table} ADD COLUMN room_id TEXT")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
 
         # Create indexes for common queries
         cursor.execute("""
@@ -210,6 +221,10 @@ class ExperienceLogger:
             CREATE INDEX IF NOT EXISTS idx_outcome_events_action
             ON outcome_events(action_event_id)
         """)
+        cursor.execute("""
+            CREATE INDEX IF NOT EXISTS idx_action_events_room
+            ON action_events(room_id)
+        """)
 
         self._conn.commit()
 
@@ -222,6 +237,10 @@ class ExperienceLogger:
     def set_session_id(self, session_id: int):
         """Set the current session ID for logging"""
         self._session_id = session_id
+
+    def set_room_id(self, room_id: str):
+        """Set the current room ID for logging"""
+        self._room_id = room_id
 
     # ==================== Sensor Snapshots ====================
 
@@ -266,7 +285,7 @@ class ExperienceLogger:
         cursor = self._conn.cursor()
         cursor.execute("""
             INSERT INTO sensor_snapshots (
-                session_id, pose_x, pose_y, pose_angle,
+                session_id, room_id, pose_x, pose_y, pose_angle,
                 battery_voltage, cliff_detected, is_picked_up, is_on_charger,
                 head_angle, lift_height,
                 accel_x, accel_y, accel_z,
@@ -276,9 +295,9 @@ class ExperienceLogger:
                 ext_ax_g, ext_ay_g, ext_az_g,
                 ext_gx_dps, ext_gy_dps, ext_gz_dps,
                 ext_ts_ms, image_path
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            self._session_id, pose_x, pose_y, pose_angle,
+            self._session_id, self._room_id, pose_x, pose_y, pose_angle,
             battery_voltage, int(cliff_detected), int(is_picked_up), int(is_on_charger),
             head_angle, lift_height,
             accel_x, accel_y, accel_z,
@@ -387,9 +406,9 @@ class ExperienceLogger:
 
         cursor = self._conn.cursor()
         cursor.execute("""
-            INSERT INTO action_events (session_id, action_type, parameters, trigger, context_snapshot_id)
-            VALUES (?, ?, ?, ?, ?)
-        """, (self._session_id, action_type, params_json, trigger, context_snapshot_id))
+            INSERT INTO action_events (session_id, room_id, action_type, parameters, trigger, context_snapshot_id)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (self._session_id, self._room_id, action_type, params_json, trigger, context_snapshot_id))
         self._conn.commit()
         return cursor.lastrowid
 
@@ -471,9 +490,9 @@ class ExperienceLogger:
 
         cursor = self._conn.cursor()
         cursor.execute("""
-            INSERT INTO outcome_events (session_id, action_event_id, outcome_type, details, sensor_snapshot_id)
-            VALUES (?, ?, ?, ?, ?)
-        """, (self._session_id, action_event_id, outcome_type, details_json, sensor_snapshot_id))
+            INSERT INTO outcome_events (session_id, room_id, action_event_id, outcome_type, details, sensor_snapshot_id)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (self._session_id, self._room_id, action_event_id, outcome_type, details_json, sensor_snapshot_id))
         self._conn.commit()
         return cursor.lastrowid
 
@@ -573,46 +592,53 @@ class ExperienceLogger:
             })
         return results
 
-    def get_recovery_statistics(self, action_type: str = "escape_stall") -> Dict[str, Any]:
+    def get_recovery_statistics(self, action_type: str = "escape_stall", room_id: str = None) -> Dict[str, Any]:
         """
         Get statistics on recovery actions (escape_stall, escape_cliff).
 
         Returns success rates and parameter analysis.
+        Optionally filter by room_id for per-room stats.
         """
         if not self._conn:
             return {}
 
         cursor = self._conn.cursor()
 
+        room_filter = ""
+        room_params = []
+        if room_id is not None:
+            room_filter = " AND a.room_id = ?"
+            room_params = [room_id]
+
         # Total actions of this type
-        cursor.execute("""
-            SELECT COUNT(*) as total FROM action_events WHERE action_type = ?
-        """, (action_type,))
+        cursor.execute(f"""
+            SELECT COUNT(*) as total FROM action_events a WHERE a.action_type = ?{room_filter}
+        """, (action_type, *room_params))
         total = cursor.fetchone()['total']
 
         if total == 0:
             return {'total': 0, 'success_rate': 0, 'by_angle': {}}
 
         # Success rate
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT COUNT(*) as success_count
             FROM action_events a
             JOIN outcome_events o ON a.id = o.action_event_id
-            WHERE a.action_type = ? AND o.outcome_type = 'success'
-        """, (action_type,))
+            WHERE a.action_type = ? AND o.outcome_type = 'success'{room_filter}
+        """, (action_type, *room_params))
         success_count = cursor.fetchone()['success_count']
 
         # Group by turn angle if available
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT
                 a.parameters,
                 o.outcome_type,
                 COUNT(*) as count
             FROM action_events a
             LEFT JOIN outcome_events o ON a.id = o.action_event_id
-            WHERE a.action_type = ?
+            WHERE a.action_type = ?{room_filter}
             GROUP BY a.parameters, o.outcome_type
-        """, (action_type,))
+        """, (action_type, *room_params))
 
         by_angle = {}
         for row in cursor.fetchall():

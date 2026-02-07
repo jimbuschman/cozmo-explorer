@@ -270,6 +270,10 @@ class StateMachine:
                 logger.info(f"Learning cycle proposed {len(proposals)} new rules")
                 for rule in proposals:
                     logger.info(f"  - {rule.name}: {rule.description}")
+                    # Immediately promote newly proposed rules to testing
+                    if self.rules_store and rule.status == "proposed":
+                        self.rules_store.update_rule_status(rule.id, "testing")
+                        logger.info(f"  Promoted to testing: {rule.name} (id={rule.id})")
 
             # Check and validate any rules that have been tested enough
             testing_rules = self.learning_coordinator.get_testing_rules()
