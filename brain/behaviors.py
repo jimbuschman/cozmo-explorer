@@ -203,12 +203,11 @@ class WanderBehavior(Behavior):
         last_yaw = self.robot.sensors.ext_yaw
         last_front_dist = self.robot.sensors.get_front_obstacle_distance()
 
-        # Calibrate tilt baseline from current mounting angle
-        baseline_pitch = self.robot.sensors.ext_pitch
-        baseline_roll = self.robot.sensors.ext_roll
+        # Tilt baseline - will be calibrated from first real sensor reading
+        baseline_pitch = None
+        baseline_roll = None
 
         logger.info(f"Starting wander for {self.duration}s")
-        logger.info(f"Tilt baseline: pitch={baseline_pitch:.1f}° roll={baseline_roll:.1f}°")
         has_distance_sensors = self.robot.sensors.ext_connected
 
         while elapsed < self.duration and not self.is_cancelled:
@@ -227,9 +226,24 @@ class WanderBehavior(Behavior):
                 await self.robot.stop()
                 return BehaviorResult(BehaviorStatus.INTERRUPTED, "Robot picked up")
 
+            # Update has_distance_sensors if ESP32 connects mid-run
+            if not has_distance_sensors and sensors.ext_connected:
+                has_distance_sensors = True
+                logger.info("External sensors connected mid-run")
+
+            # Calibrate tilt baseline from first real sensor reading
+            if has_distance_sensors and baseline_pitch is None and (sensors.ext_pitch != 0.0 or sensors.ext_roll != 0.0):
+                baseline_pitch = sensors.ext_pitch
+                baseline_roll = sensors.ext_roll
+                logger.info(f"Tilt baseline calibrated: pitch={baseline_pitch:.1f}° roll={baseline_roll:.1f}°")
+
             # Check tilt from external IMU (relative to calibrated baseline)
-            pitch_delta = abs(sensors.ext_pitch - baseline_pitch)
-            roll_delta = abs(sensors.ext_roll - baseline_roll)
+            if has_distance_sensors and baseline_pitch is not None:
+                pitch_delta = abs(sensors.ext_pitch - baseline_pitch)
+                roll_delta = abs(sensors.ext_roll - baseline_roll)
+            else:
+                pitch_delta = 0
+                roll_delta = 0
             if has_distance_sensors and (pitch_delta > 15 or roll_delta > 15):
                 logger.warning(f"Tilt detected: pitch_delta={pitch_delta:.1f}° roll_delta={roll_delta:.1f}°")
                 await self.robot.stop()
