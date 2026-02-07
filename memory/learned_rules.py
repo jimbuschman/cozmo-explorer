@@ -328,8 +328,10 @@ class LearnedRulesStore:
         location_id: Optional[str] = None
     ) -> tuple[Dict[str, Any], Optional[int]]:
         """
-        Apply active rules to modify a base action.
+        Apply active and testing rules to modify a base action.
 
+        Rules in "testing" status are applied so their performance can be
+        measured and they can eventually be validated or rejected.
         Uses conflict resolution: most specific matching rule wins.
         Specificity = number of conditions. Ties broken by success_rate.
 
@@ -343,13 +345,15 @@ class LearnedRulesStore:
         Returns:
             Tuple of (modified action parameters, rule_id that was applied or None)
         """
-        active_rules = self.get_active_rules()
-        if not active_rules:
+        # Include both active and testing rules - testing rules need to be
+        # applied in the field so we can measure their performance
+        candidate_rules = self.get_active_rules() + self.get_rules_by_status("testing")
+        if not candidate_rules:
             return base_action, None
 
         # Filter to matching rules
         matching_rules = []
-        for rule in active_rules:
+        for rule in candidate_rules:
             # Check scope - global rules always apply, location rules only in their location
             if rule.scope == "location" and rule.location_id != location_id:
                 continue
@@ -359,12 +363,12 @@ class LearnedRulesStore:
         if not matching_rules:
             return base_action, None
 
-        # Conflict resolution: most specific wins, then highest success rate
-        # Location-scoped rules get priority over global rules (when implemented)
+        # Conflict resolution: active beats testing, most specific wins, then highest success rate
         best_rule = max(
             matching_rules,
             key=lambda r: (
-                r.scope == "location",  # Location rules beat global (future)
+                r.status == "active",    # Active rules beat testing rules
+                r.scope == "location",   # Location rules beat global (future)
                 r.specificity,           # More conditions = more specific
                 r.success_rate           # Higher success rate breaks ties
             )
