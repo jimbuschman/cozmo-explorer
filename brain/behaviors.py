@@ -484,11 +484,28 @@ class WanderBehavior(Behavior):
             await asyncio.sleep(backup_time)
             await self.robot.stop()
 
-            # Turn 150-180 degrees away - basically turn around
-            turn_angle = self._pick_turn_direction(left_dist, right_dist, 160)
+            # Pick direction: use map if available, fall back to sensors
+            turn_angle = 160  # default magnitude
+            if self.spatial_map:
+                x, y = self.robot.pose.x, self.robot.pose.y
+                target = self.spatial_map.find_nearest_frontier(x, y, min_distance=100)
+                if target:
+                    target_angle = math.atan2(target[1] - y, target[0] - x)
+                    heading_error = target_angle - self.robot.pose.angle
+                    heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
+                    # Turn toward the frontier, at least 90 degrees
+                    turn_angle = math.degrees(heading_error)
+                    if abs(turn_angle) < 90:
+                        turn_angle = 90 if turn_angle > 0 else -90
+                    turn_angle = max(-180, min(180, turn_angle))
+                else:
+                    turn_angle = self._pick_turn_direction(left_dist, right_dist, 160)
+            else:
+                turn_angle = self._pick_turn_direction(left_dist, right_dist, 160)
+
             await self._turn_with_mapping(turn_angle, speed=config.ESCAPE_SPEED, arc_ratio=0.3)
 
-            logger.info(f"Hard escape: backed up {backup_time}s, turned {turn_angle}°")
+            logger.info(f"Hard escape: backed up {backup_time}s, turned {turn_angle:.0f}°")
         finally:
             self.robot._escape_in_progress = False
             self.robot.sensors.collision_detected = False
