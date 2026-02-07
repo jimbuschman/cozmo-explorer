@@ -16,6 +16,7 @@ from pathlib import Path
 
 import config
 from cozmo_interface.robot import CozmoRobot, RobotPose
+from brain.maneuvers import ZigzagManeuver, ManeuverStatus
 
 if TYPE_CHECKING:
     from memory.experience_logger import ExperienceLogger
@@ -283,13 +284,26 @@ class WanderBehavior(Behavior):
                     last_front_dist = self.robot.sensors.get_front_obstacle_distance()
                     continue
 
-                # Caution zone - turn away with enough force to actually redirect
+                # Caution zone - zigzag escape (sensor-aware forward-reverse arcs)
                 if 0 < front_dist < self.CAUTION_DISTANCE:
-                    turn_angle = self._pick_turn_direction(left_dist, right_dist, 60)
-                    logger.info(f"Obstacle at {front_dist}mm, avoiding {turn_angle}°")
-                    await self.robot.escape_turn(turn_angle)
+                    direction = "left" if self._pick_turn_direction(left_dist, right_dist, 60) > 0 else "right"
+                    logger.info(f"Obstacle at {front_dist}mm, zigzag escape {direction}")
+                    self.robot._escape_in_progress = True
+                    try:
+                        zigzag = ZigzagManeuver(self.robot, sensors)
+                        result = await zigzag.execute(direction)
+                    finally:
+                        self.robot._escape_in_progress = False
+                    sensors.collision_detected = False
                     turns_made += 1
-                    elapsed += 2.0
+                    elapsed += result.duration
+                    if result.status == ManeuverStatus.FAILED:
+                        logger.warning("Zigzag failed, escalating to stall escape")
+                        await self._escape_stall()
+                        elapsed += 2.0
+                    stall_check_count = 0
+                    last_yaw = self.robot.sensors.ext_yaw
+                    last_front_dist = self.robot.sensors.get_front_obstacle_distance()
                     continue
 
                 # No speed reduction - trailer needs full speed to turn effectively

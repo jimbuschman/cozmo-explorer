@@ -604,6 +604,13 @@ class CozmoRobot:
         else:
             await self.turn(angle)
 
+    async def set_wheels(self, left_speed: float, right_speed: float):
+        """Set wheel speeds without blocking. Caller controls duration."""
+        if pycozmo and self._client:
+            self._client.drive_wheels(left_speed, right_speed)
+        else:
+            logger.debug(f"SIM: set_wheels left={left_speed} right={right_speed}")
+
     async def stop(self):
         """Stop all movement immediately"""
         if pycozmo and self._client:

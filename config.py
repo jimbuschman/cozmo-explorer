@@ -163,3 +163,15 @@ ARC_RATIOS = {
 # Allows direct control of the robot via keyboard for testing and training data.
 
 MANUAL_CONTROL_ENABLED = False  # Start in manual mode if True
+
+# =============================================================================
+# ZIGZAG ESCAPE MANEUVER
+# =============================================================================
+# Forward arc one direction, reverse arc the other, repeat to ratchet heading.
+# Sensor-aware: checks sensors every poll interval during arcs.
+
+ZIGZAG_MAX_CYCLES = 5            # Max forward-reverse cycles before giving up
+ZIGZAG_ARC_DURATION = 0.8        # Initial arc duration per phase (seconds)
+ZIGZAG_ARC_ESCALATION = 0.2      # Add this much duration per cycle
+ZIGZAG_SENSOR_POLL = 0.1         # Sensor check interval during arcs (seconds)
+ZIGZAG_ARC_RATIO = 0.3           # Inner/outer wheel ratio (tight arcs)

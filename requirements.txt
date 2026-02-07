@@ -27,3 +27,6 @@ python-dotenv>=1.0.0
 
 # External sensors (ESP32 pod)
 pyserial>=3.5
+
+# Simulator
+pygame>=2.5.0
