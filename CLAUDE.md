@@ -1,5 +1,15 @@
 # Cozmo Explorer - Project Context
 
+## RULES FOR CLAUDE - READ EVERY TIME
+1. **REVIEW DATA BEFORE CHANGING CODE.** Do not change code based on assumptions. Read the logs the user provides. Analyze them. Then discuss before editing.
+2. **The learning system handles behavior tuning.** Escape angles, backup durations, arc ratios - the robot learns these from experience. Do NOT hand-code escape strategies.
+3. **Only code infrastructure changes.** Map building, sensor integration, learning pipeline plumbing, data flow - these are code changes. Specific robot behaviors are learned.
+4. **The simulator tests infrastructure, not behavior.** Use it to verify map building works, code doesn't crash, UI renders. Do NOT tune escape behavior in the simulator - it doesn't translate to the real robot.
+5. **Do not make changes without discussing them first.** Explain what you want to change and why. Wait for approval.
+6. **This robot is a mapper/surveyor.** Its job is to build the spatial map as best it can. Other more agile robots will use the map later.
+7. **Stop going in circles.** If you find yourself reverting or rewriting the same code, stop and talk to the user.
+8. **Don't take shortcuts.** Think through the proper solution instead of defaulting to the quick/easy answer. If the user asks for something, give them what they asked for - don't suggest a dumbed-down version to save effort.
+
 ## What This Is
 Autonomous exploration robot: Cozmo + ESP32 sensor pod + trailer. Python on PC controls robot over WiFi, ESP32 sends sensor data via UDP. LLM (Ollama/Gemma3) observes and journals in Phase 1, will direct in Phase 2.
 
@@ -33,13 +43,16 @@ All 8 fixes from comprehensive data review implemented:
 - Rules promoting from proposed -> testing (as of fix #3)
 - Tilt baseline calibration from first real ESP32 reading
 
+### Current Focus (2026-02-06)
+- Map infrastructure is implemented (sensor ray-tracing, frontier steering, occupancy grid)
+- Next step: verify learning pipeline works end-to-end with map data, then run on real robot
+- Learning pipeline known issues need checking before real runs:
+  - Rules from previous sessions lose _testing_rules stats on restart (coordinator is in-memory only)
+  - 24 rules stuck in "testing" in DB but not tracked in coordinator memory
+  - LLM keeps proposing similar/duplicate rules each cycle (no dedup)
+
 ### Known Issues / Not Yet Verified
-- Escape turns (100mm/s arcs) not tested under load yet - battery died before long run
-- Need 2-3 minute run to confirm: area coverage improvement, no stuck loops, rules accumulating test data
 - Head angle for camera may be looking too high (seeing sensor mount instead of scene)
-- LLM keeps proposing similar/duplicate rules each cycle (no dedup)
-- Rules from previous sessions lose their _testing_rules stats on restart (coordinator is in-memory only)
-- 24 rules stuck in "testing" in DB but not tracked in coordinator memory
 
 ### Key Architecture Facts
 - robot.turn() in trailer mode = slow 30mm/s arcs (for normal navigation)

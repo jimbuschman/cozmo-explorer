@@ -32,7 +32,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import config
 from simulator.sim_robot import SimRobot
-from simulator.world import PRESETS, multi_room, box_room, corridor, corner, dead_end
+from simulator.world import PRESETS, multi_room, box_room, corridor, corner, dead_end, furnished_room
 from memory.spatial_map import SpatialMap
 from memory.experience_logger import ExperienceLogger
 from memory.pattern_analyzer import PatternAnalyzer
@@ -61,6 +61,7 @@ WORLD_MAP = {
     'corner': corner,
     'dead_end': dead_end,
     'multi_room': multi_room,
+    'furnished_room': furnished_room,
 }
 
 

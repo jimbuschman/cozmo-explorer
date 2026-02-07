@@ -97,6 +97,78 @@ def dead_end(width=400, depth=500):
     )
 
 
+def furnished_room():
+    """
+    Large open room (2500 x 2500 mm) with furniture-like obstacles.
+
+    Simulates a real room: open space to drive, but things to bump into.
+
+        +------------------------------------+
+        |                                    |
+        |    [couch]              [shelf]    |
+        |                                    |
+        |                                    |
+        |          [table]                   |
+        |          [     ]                   |
+        |                                    |
+        |                         [chair]    |
+        |    [box]                           |
+        |                                    |
+        +------------------------------------+
+    """
+    w, h = 2500, 2500
+    hw, hh = w / 2, h / 2
+    walls = [
+        # Outer walls
+        Wall(-hw, -hh, hw, -hh),   # bottom
+        Wall(hw, -hh, hw, hh),     # right
+        Wall(hw, hh, -hw, hh),     # top
+        Wall(-hw, hh, -hw, -hh),   # left
+
+        # Couch (top-left, long rectangle)
+        Wall(-900, 800, -400, 800),
+        Wall(-400, 800, -400, 900),
+        Wall(-400, 900, -900, 900),
+        Wall(-900, 900, -900, 800),
+
+        # Shelf (top-right, narrow rectangle against wall)
+        Wall(600, 850, 1000, 850),
+        Wall(1000, 850, 1000, 1050),
+        Wall(1000, 1050, 600, 1050),
+        Wall(600, 1050, 600, 850),
+
+        # Table (center, larger square)
+        Wall(-200, 100, 300, 100),
+        Wall(300, 100, 300, 400),
+        Wall(300, 400, -200, 400),
+        Wall(-200, 400, -200, 100),
+
+        # Chair (lower-right)
+        Wall(600, -400, 800, -400),
+        Wall(800, -400, 800, -200),
+        Wall(800, -200, 600, -200),
+        Wall(600, -200, 600, -400),
+
+        # Box (lower-left, small)
+        Wall(-900, -500, -700, -500),
+        Wall(-700, -500, -700, -350),
+        Wall(-700, -350, -900, -350),
+        Wall(-900, -350, -900, -500),
+
+        # Angled bookcase (mid-right, diagonal obstacle)
+        Wall(700, 200, 900, 400),
+        Wall(900, 400, 850, 450),
+        Wall(850, 450, 650, 250),
+        Wall(650, 250, 700, 200),
+    ]
+
+    return World(
+        walls=walls,
+        name="furnished_room_2.5x2.5",
+        spawn_x=0, spawn_y=-200, spawn_theta=0,  # Start in center-ish
+    )
+
+
 def multi_room():
     """
     Multi-room environment (~3m x 3m) for full-stack simulation.
@@ -195,4 +267,5 @@ PRESETS = {
     3: corner,
     4: dead_end,
     5: multi_room,
+    6: furnished_room,
 }
