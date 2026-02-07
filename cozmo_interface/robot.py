@@ -595,8 +595,8 @@ class CozmoRobot:
 
         if config.TRAILER_MODE:
             escape_speed = config.ESCAPE_SPEED
-            ratio = config.TRAILER_ARC_RATIO
-            arc_duration = abs(angle) / 30.0 * 1.5  # Same formula as working cliff escape
+            ratio = 0.3  # Tighter than normal arc (0.5) for sharper escape turns
+            arc_duration = abs(angle) / 30.0 * 1.0  # Shorter than cliff escape - don't overshoot
             if angle > 0:
                 await self.arc_turn_left(escape_speed, ratio, arc_duration)
             else:

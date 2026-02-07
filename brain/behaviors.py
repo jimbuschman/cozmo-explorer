@@ -262,7 +262,7 @@ class WanderBehavior(Behavior):
                     self.robot._escape_in_progress = True
                     await self.robot.stop()
                     escape_speed = config.ESCAPE_SPEED
-                    backup_time = 1.0 if config.TRAILER_MODE else 0.5
+                    backup_time = 1.5 if config.TRAILER_MODE else 0.5
                     await self.robot.drive(-escape_speed, duration=backup_time)
                     await asyncio.sleep(backup_time)
                     turn_angle = self._pick_turn_direction(left_dist, right_dist, 120)
