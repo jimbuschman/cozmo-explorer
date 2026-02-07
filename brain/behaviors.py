@@ -478,14 +478,9 @@ class WanderBehavior(Behavior):
 
         try:
             escape_speed = config.ESCAPE_SPEED
-            # Back up for 3 seconds at escape speed = 300mm clearance
-            backup_time = 3.0
-            await self.robot.drive(-escape_speed, duration=backup_time)
-            await asyncio.sleep(backup_time)
-            await self.robot.stop()
 
             # Pick direction: use map to find frontier AWAY from the wall
-            # The wall is roughly in the direction the robot is facing (it just backed up)
+            # The wall is roughly in the direction the robot is facing
             turn_angle = 160  # default magnitude
             if self.spatial_map:
                 x, y = self.robot.pose.x, self.robot.pose.y
@@ -504,16 +499,34 @@ class WanderBehavior(Behavior):
                     logger.info(f"  Map: pos=({x:.0f},{y:.0f}) heading={heading_deg:.0f}° "
                                 f"frontier=({target[0]:.0f},{target[1]:.0f}) turn={turn_angle:.0f}°")
                 else:
-                    # No frontier outside the exclusion cone - turn 180
                     turn_angle = self._pick_turn_direction(left_dist, right_dist, 160)
                     logger.info(f"  Map: pos=({x:.0f},{y:.0f}) no frontier outside wall dir, "
                                 f"sensor pick={turn_angle}°")
             else:
                 turn_angle = self._pick_turn_direction(left_dist, right_dist, 160)
 
-            await self._turn_with_mapping(turn_angle, speed=config.ESCAPE_SPEED, arc_ratio=0.3)
+            # Reverse-arc: back up WHILE turning so the robot moves away from
+            # the wall the entire time (forward arcs eat the backup distance)
+            arc_ratio = 0.3
+            duration = 4.0  # Long reverse arc to really clear the area
+            step = 0.15
+            if turn_angle > 0:
+                # Reverse-arc right (to end up facing left)
+                await self.robot.set_wheels(-escape_speed, -escape_speed * arc_ratio)
+            else:
+                # Reverse-arc left (to end up facing right)
+                await self.robot.set_wheels(-escape_speed * arc_ratio, -escape_speed)
 
-            logger.info(f"Hard escape: backed up {backup_time}s, turned {turn_angle:.0f}°")
+            elapsed_turn = 0.0
+            while elapsed_turn < duration:
+                await asyncio.sleep(step)
+                elapsed_turn += step
+                if self.spatial_map and self.robot.sensors.ext_connected:
+                    self._update_map(self.robot.sensors)
+
+            await self.robot.stop()
+
+            logger.info(f"Hard escape: reverse-arc {duration}s, turn={turn_angle:.0f}°")
         finally:
             self.robot._escape_in_progress = False
             self.robot.sensors.collision_detected = False
