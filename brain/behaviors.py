@@ -203,7 +203,12 @@ class WanderBehavior(Behavior):
         last_yaw = self.robot.sensors.ext_yaw
         last_front_dist = self.robot.sensors.get_front_obstacle_distance()
 
+        # Calibrate tilt baseline from current mounting angle
+        baseline_pitch = self.robot.sensors.ext_pitch
+        baseline_roll = self.robot.sensors.ext_roll
+
         logger.info(f"Starting wander for {self.duration}s")
+        logger.info(f"Tilt baseline: pitch={baseline_pitch:.1f}° roll={baseline_roll:.1f}°")
         has_distance_sensors = self.robot.sensors.ext_connected
 
         while elapsed < self.duration and not self.is_cancelled:
@@ -222,9 +227,11 @@ class WanderBehavior(Behavior):
                 await self.robot.stop()
                 return BehaviorResult(BehaviorStatus.INTERRUPTED, "Robot picked up")
 
-            # Check tilt from external IMU
-            if has_distance_sensors and (abs(sensors.ext_pitch) > 35 or abs(sensors.ext_roll) > 35):
-                logger.warning(f"Tilt detected: pitch={sensors.ext_pitch:.1f}° roll={sensors.ext_roll:.1f}°")
+            # Check tilt from external IMU (relative to calibrated baseline)
+            pitch_delta = abs(sensors.ext_pitch - baseline_pitch)
+            roll_delta = abs(sensors.ext_roll - baseline_roll)
+            if has_distance_sensors and (pitch_delta > 15 or roll_delta > 15):
+                logger.warning(f"Tilt detected: pitch_delta={pitch_delta:.1f}° roll_delta={roll_delta:.1f}°")
                 await self.robot.stop()
                 await asyncio.sleep(0.5)
                 continue
@@ -243,13 +250,15 @@ class WanderBehavior(Behavior):
                     backup_time = 1.0 if config.TRAILER_MODE else 0.5
                     await self.robot.drive(-escape_speed, duration=backup_time)
                     await asyncio.sleep(backup_time)
-                    turn_angle = self._pick_turn_direction(left_dist, right_dist, 90)
-                    await self.robot.turn(turn_angle)
+                    turn_angle = self._pick_turn_direction(left_dist, right_dist, 120)
+                    await self.robot.escape_turn(turn_angle)
                     sensors.collision_detected = False  # Clear flag from maneuver
                     turns_made += 1
                     elapsed += backup_time + 1.0
                     last_pose_x, last_pose_y = self.robot.pose.x, self.robot.pose.y
                     stall_check_count = 0
+                    last_yaw = self.robot.sensors.ext_yaw
+                    last_front_dist = self.robot.sensors.get_front_obstacle_distance()
                     continue
 
                 # Caution zone - turn away
@@ -277,6 +286,8 @@ class WanderBehavior(Behavior):
                 # Check if yaw has changed (robot actually moving/turning)
                 current_yaw = sensors.ext_yaw
                 yaw_change = abs(current_yaw - last_yaw)
+                if yaw_change > 180:
+                    yaw_change = 360 - yaw_change
                 # Also check if front distance is changing (approaching or receding)
                 current_front = sensors.get_front_obstacle_distance()
                 dist_change = abs(current_front - last_front_dist) if last_front_dist > 0 and current_front > 0 else 999
@@ -298,6 +309,8 @@ class WanderBehavior(Behavior):
                 elapsed += 1.5
                 stall_check_count = 0
                 stall_imu_count = 0
+                last_yaw = self.robot.sensors.ext_yaw
+                last_front_dist = self.robot.sensors.get_front_obstacle_distance()
                 continue
 
             stall_check_count += 1
@@ -327,13 +340,20 @@ class WanderBehavior(Behavior):
         )
 
     def _pick_turn_direction(self, left_dist: int, right_dist: int, magnitude: int = 90) -> int:
-        """Pick turn direction based on clearance."""
-        if left_dist <= 0 and right_dist <= 0:
+        """Pick turn direction based on clearance.
+
+        Uses _valid_distance() to properly handle -1 (disconnected) readings.
+        When one side has no valid data, turn toward the unknown (potentially open) side.
+        """
+        from cozmo_interface.robot import SensorData
+        left_valid = SensorData._valid_distance(left_dist) if left_dist > 0 else False
+        right_valid = SensorData._valid_distance(right_dist) if right_dist > 0 else False
+        if not left_valid and not right_valid:
             return random.choice([-magnitude, magnitude])
-        if left_dist <= 0:
-            return -magnitude
-        if right_dist <= 0:
-            return magnitude
+        if not left_valid:
+            return magnitude  # Turn left toward unknown (might be open)
+        if not right_valid:
+            return -magnitude  # Turn right toward unknown (might be open)
         return magnitude if left_dist > right_dist else -magnitude
 
     async def _escape_cliff(self):
@@ -505,9 +525,8 @@ class WanderBehavior(Behavior):
             await asyncio.sleep(straight_backup)
             await self.robot.stop()
 
-            # Step 2: Point turn to actually change direction
-            await self.robot.turn(angle)
-            await asyncio.sleep(0.3)
+            # Step 2: Arc turn at escape speed to actually change direction
+            await self.robot.escape_turn(angle)
         else:
             # Normal mode: back up straight then turn
             await self.robot.drive(-self.speed, duration=backup_duration)

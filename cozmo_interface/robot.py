@@ -72,10 +72,9 @@ class SensorData:
 
     @staticmethod
     def _valid_distance(d: int) -> bool:
-        """Check if a distance reading is valid (not error/disconnected/structure)."""
+        """Check if a distance reading is valid (not error/disconnected)."""
         # -1 = disconnected, 0 = error, 8191/65535 = ToF out-of-range/error
-        # Below SENSOR_MIN_DISTANCE = reading the robot's own structure
-        return config.SENSOR_MIN_DISTANCE < d < 5000
+        return 0 < d < 5000
 
     def get_front_obstacle_distance(self) -> int:
         """Get closest obstacle distance from forward-facing sensors."""
@@ -580,6 +579,27 @@ class CozmoRobot:
             logger.debug(f"SIM: reverse_arc_turn_right speed={speed} ratio={ratio} duration={duration}")
 
         await asyncio.sleep(duration)
+
+    async def escape_turn(self, angle: float):
+        """Turn during escape maneuver - uses adequate speed regardless of trailer mode.
+
+        In trailer mode, robot.turn() uses slow 30mm/s arcs which don't generate
+        enough torque to break free from obstacles. This method uses escape speed
+        (100mm/s) with the same arc formula as the working cliff escape.
+        """
+        if not self.is_connected:
+            return
+
+        if config.TRAILER_MODE:
+            escape_speed = config.ESCAPE_SPEED
+            ratio = config.TRAILER_ARC_RATIO
+            arc_duration = abs(angle) / 30.0 * 1.5  # Same formula as working cliff escape
+            if angle > 0:
+                await self.arc_turn_left(escape_speed, ratio, arc_duration)
+            else:
+                await self.arc_turn_right(escape_speed, ratio, arc_duration)
+        else:
+            await self.turn(angle)
 
     async def stop(self):
         """Stop all movement immediately"""

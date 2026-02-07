@@ -255,6 +255,21 @@ class StateMachine:
         logger.info("Running learning analysis cycle")
 
         try:
+            # Move proposed rules to testing so they enter the testing pipeline
+            if self.rules_store:
+                proposed_rules = self.rules_store.get_rules_by_status("proposed")
+                for rule in proposed_rules:
+                    self.rules_store.update_rule_status(rule.id, "testing")
+                    # Initialize testing stats in the coordinator
+                    if self.learning_coordinator and rule.id not in self.learning_coordinator._testing_rules:
+                        self.learning_coordinator._testing_rules[rule.id] = {
+                            'started': datetime.now(),
+                            'tests': 0,
+                            'successes': 0,
+                            'baseline_rate': 0.5
+                        }
+                    logger.info(f"Promoted rule to testing: {rule.name} (id={rule.id})")
+
             # Run analysis and get proposals
             proposals = await self.learning_coordinator.run_analysis_cycle()
 
