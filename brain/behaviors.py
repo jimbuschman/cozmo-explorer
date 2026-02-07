@@ -484,26 +484,30 @@ class WanderBehavior(Behavior):
             await asyncio.sleep(backup_time)
             await self.robot.stop()
 
-            # Pick direction: use map if available, fall back to sensors
+            # Pick direction: use map to find frontier AWAY from the wall
+            # The wall is roughly in the direction the robot is facing (it just backed up)
             turn_angle = 160  # default magnitude
             if self.spatial_map:
                 x, y = self.robot.pose.x, self.robot.pose.y
-                heading_deg = math.degrees(self.robot.pose.angle)
-                target = self.spatial_map.find_nearest_frontier(x, y, min_distance=100)
+                heading = self.robot.pose.angle
+                heading_deg = math.degrees(heading)
+                # Exclude frontiers in the direction of the wall (±45° of current heading)
+                target = self.spatial_map.find_nearest_frontier(
+                    x, y, min_distance=100,
+                    exclude_angle=heading
+                )
                 if target:
                     target_angle = math.atan2(target[1] - y, target[0] - x)
-                    heading_error = target_angle - self.robot.pose.angle
+                    heading_error = target_angle - heading
                     heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
-                    # Turn toward the frontier, at least 90 degrees
-                    turn_angle = math.degrees(heading_error)
-                    if abs(turn_angle) < 90:
-                        turn_angle = 90 if turn_angle > 0 else -90
-                    turn_angle = max(-180, min(180, turn_angle))
+                    turn_angle = max(-180, min(180, math.degrees(heading_error)))
                     logger.info(f"  Map: pos=({x:.0f},{y:.0f}) heading={heading_deg:.0f}° "
                                 f"frontier=({target[0]:.0f},{target[1]:.0f}) turn={turn_angle:.0f}°")
                 else:
+                    # No frontier outside the exclusion cone - turn 180
                     turn_angle = self._pick_turn_direction(left_dist, right_dist, 160)
-                    logger.info(f"  Map: pos=({x:.0f},{y:.0f}) no frontier, sensor pick={turn_angle}°")
+                    logger.info(f"  Map: pos=({x:.0f},{y:.0f}) no frontier outside wall dir, "
+                                f"sensor pick={turn_angle}°")
             else:
                 turn_angle = self._pick_turn_direction(left_dist, right_dist, 160)
 

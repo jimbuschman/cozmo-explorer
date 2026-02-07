@@ -229,7 +229,9 @@ class SpatialMap:
         self,
         x: float,
         y: float,
-        min_distance: float = 100.0
+        min_distance: float = 100.0,
+        exclude_angle: float = None,
+        exclude_cone: float = math.radians(45)
     ) -> Optional[Tuple[float, float]]:
         """
         Find the nearest frontier cell (UNKNOWN cell adjacent to FREE/VISITED).
@@ -240,6 +242,10 @@ class SpatialMap:
         Args:
             x, y: Current position in mm
             min_distance: Minimum search distance in mm
+            exclude_angle: If set, skip frontiers within exclude_cone of this
+                           angle (radians). Used to avoid turning back toward
+                           a wall after escaping.
+            exclude_cone: Half-width of exclusion cone in radians (default 45°)
 
         Returns:
             (x, y) of nearest frontier cell, or None if none found
@@ -264,11 +270,25 @@ class SpatialMap:
                         continue
 
                     # Check if adjacent to FREE or VISITED
+                    is_frontier = False
                     for nx, ny in [(cx-1, cy), (cx+1, cy), (cx, cy-1), (cx, cy+1)]:
                         if 0 <= nx < self.width and 0 <= ny < self.height:
                             if self.grid[ny, nx] in (CellState.FREE, CellState.VISITED):
-                                candidates.append((cx, cy))
+                                is_frontier = True
                                 break
+
+                    if not is_frontier:
+                        continue
+
+                    # Filter by exclude_angle if set
+                    if exclude_angle is not None:
+                        wx, wy = self.grid_to_world(cx, cy)
+                        angle_to = math.atan2(wy - y, wx - x)
+                        diff = (angle_to - exclude_angle + math.pi) % (2 * math.pi) - math.pi
+                        if abs(diff) < exclude_cone:
+                            continue
+
+                    candidates.append((cx, cy))
 
             if candidates:
                 pick = random.choice(candidates)
