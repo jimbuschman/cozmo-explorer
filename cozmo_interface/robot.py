@@ -121,6 +121,7 @@ class CozmoRobot:
         # For collision detection - track last horizontal accel
         self._last_accel_xy: Optional[float] = None
         self._audio_playing: bool = False  # Suppress collision detection during audio
+        self._escape_in_progress: bool = False  # Suppress collision detection during escapes
 
     @property
     def state(self) -> RobotState:
@@ -286,7 +287,7 @@ class CozmoRobot:
             # This runs every ~30ms at packet level for fast response
             # Skip during audio playback (speaker vibration causes false positives)
             accel_xy = np.sqrt(self._sensors.accel_x**2 + self._sensors.accel_y**2)
-            if self._last_accel_xy is not None and not self._audio_playing:
+            if self._last_accel_xy is not None and not self._audio_playing and not self._escape_in_progress:
                 accel_delta = abs(accel_xy - self._last_accel_xy)
                 if accel_delta > config.COLLISION_ACCEL_THRESHOLD:
                     self._sensors.collision_detected = True
