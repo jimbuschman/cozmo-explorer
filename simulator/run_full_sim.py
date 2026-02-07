@@ -351,6 +351,10 @@ async def run_room(
 
     wall_seconds = time.monotonic() - room_start
 
+    # Save map for this room
+    map_path = config.DATA_DIR / f"sim_map_{room_id}.npz"
+    spatial_map.save(str(map_path))
+
     # End session
     state_store.end_session(
         duration=wall_seconds,
