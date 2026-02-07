@@ -277,18 +277,17 @@ class WanderBehavior(Behavior):
                     last_front_dist = self.robot.sensors.get_front_obstacle_distance()
                     continue
 
-                # Caution zone - turn away
+                # Caution zone - turn away with enough force to actually redirect
                 if 0 < front_dist < self.CAUTION_DISTANCE:
-                    turn_angle = self._pick_turn_direction(left_dist, right_dist, 45)
-                    logger.info(f"Obstacle at {front_dist}mm, turning {turn_angle}°")
-                    await self.robot.stop()
-                    await self.robot.turn(turn_angle)
+                    turn_angle = self._pick_turn_direction(left_dist, right_dist, 60)
+                    logger.info(f"Obstacle at {front_dist}mm, avoiding {turn_angle}°")
+                    await self.robot.escape_turn(turn_angle)
                     turns_made += 1
-                    elapsed += abs(turn_angle) / 45
+                    elapsed += 2.0
                     continue
 
-                # Speed adjustment
-                current_speed = self.speed * 0.5 if 0 < front_dist < self.SLOW_DISTANCE else self.speed
+                # No speed reduction - trailer needs full speed to turn effectively
+                current_speed = self.speed
             else:
                 current_speed = self.speed
 
