@@ -431,9 +431,14 @@ class WanderBehavior(Behavior):
             return -magnitude  # Turn right toward unknown (might be open)
         return magnitude if left_dist > right_dist else -magnitude
 
-    async def _turn_with_mapping(self, angle: float, speed: float = 30.0):
+    async def _turn_with_mapping(self, angle: float, speed: float = 30.0, arc_ratio: float = None):
         """Turn while continuously updating the map from sensor sweeps."""
-        ratio = config.TRAILER_ARC_RATIO if config.TRAILER_MODE else 0.0
+        if arc_ratio is not None:
+            ratio = arc_ratio
+        elif config.TRAILER_MODE:
+            ratio = config.TRAILER_ARC_RATIO
+        else:
+            ratio = 0.0
         total_duration = abs(angle) / speed * 2.0 if config.TRAILER_MODE else abs(angle) / speed
         step = 0.15  # Same interval as main loop
 
@@ -501,7 +506,7 @@ class WanderBehavior(Behavior):
 
             # Turn 150-180 degrees away - basically turn around
             turn_angle = self._pick_turn_direction(left_dist, right_dist, 160)
-            await self.robot.escape_turn(turn_angle)
+            await self._turn_with_mapping(turn_angle, speed=config.ESCAPE_SPEED, arc_ratio=0.3)
 
             logger.info(f"Hard escape: backed up {backup_time}s, turned {turn_angle}°")
         finally:
