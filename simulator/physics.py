@@ -135,9 +135,12 @@ def step(state: RobotTrailerState, dt: float):
     state.theta = (state.theta + math.pi) % (2 * math.pi) - math.pi
 
     # Trailer follows (bicycle model for single-axle trailer)
+    # Standard kinematic equation: phi_dot = -(v*sin(phi))/L2 - omega*(1 + L1*cos(phi)/L2)
+    # Negative v*sin(phi) term means forward driving straightens the trailer (self-stabilizing)
+    # The -omega term couples robot turning directly to hitch angle change
     if abs(v) > 0.1 or abs(omega) > 0.1:  # Only update if moving
-        phi_dot = (v * math.sin(phi) / TRAILER_LENGTH) - \
-                  (omega * ROBOT_LENGTH * math.cos(phi) / TRAILER_LENGTH)
+        phi_dot = -(v * math.sin(phi) / TRAILER_LENGTH) - \
+                  omega - (omega * ROBOT_LENGTH * math.cos(phi) / TRAILER_LENGTH)
         state.trailer_phi += phi_dot * dt
 
         # Clamp to jackknife limit

@@ -467,12 +467,29 @@ class WanderBehavior(Behavior):
 
     async def _escape_hard(self, left_dist: int, right_dist: int):
         """
-        Aggressive escape when zigzag fails - long backup and big turn.
+        Aggressive escape for proactive obstacle avoidance.
 
-        This is the last resort before the robot is truly stuck. Backs up
-        far enough to clear the trailer, then does a large turn away from
-        the obstacle using sensor data to pick direction.
+        Uses map frontiers + sensor data to pick direction, then reverse-arcs
+        away. Participates in the learning pipeline: logs experience, applies
+        rules, and records rule performance.
         """
+        # Log sensor snapshot before action
+        snapshot_id = None
+        if self.experience_logger:
+            snapshot_id = self.experience_logger.log_sensor_snapshot_from_robot(self.robot)
+
+        # Get sensor context for rule matching
+        sensor_context = self._get_sensor_context()
+
+        # Determine turn angles - apply learned rules if available
+        base_action = {"angles": self.DEFAULT_STALL_ANGLES, "backup_duration": 4.0, "arc_ratio": "medium"}
+        applied_rule_id = None
+        if self.rules_store:
+            modified_action, applied_rule_id = self.rules_store.apply_rules_to_action(base_action, sensor_context)
+            angles = modified_action.get("angles", self.DEFAULT_STALL_ANGLES)
+        else:
+            angles = self.DEFAULT_STALL_ANGLES
+
         self.robot._escape_in_progress = True
         await self.robot.stop()
 
@@ -505,6 +522,29 @@ class WanderBehavior(Behavior):
             else:
                 turn_angle = self._pick_turn_direction(left_dist, right_dist, 160)
 
+            # If rules provided angle preferences, use the closest match to map direction
+            if applied_rule_id and angles != self.DEFAULT_STALL_ANGLES:
+                # Pick the rule-suggested angle closest to the map-chosen direction
+                turn_angle = min(angles, key=lambda a: abs(a - turn_angle))
+
+            # Log action
+            action_id = None
+            if self.experience_logger:
+                action_id = self.experience_logger.log_action(
+                    action_type="escape_stall",
+                    parameters={
+                        "angle": turn_angle,
+                        "backup_duration": 4.0,
+                        "rule_id": applied_rule_id,
+                        "trailer_mode": config.TRAILER_MODE,
+                        "trigger_type": "obstacle_proactive"
+                    },
+                    trigger="obstacle",
+                    context_snapshot_id=snapshot_id
+                )
+                self._current_action_id = action_id
+                self._current_action_type = "escape_stall"
+
             # Reverse-arc: back up WHILE turning so the robot moves away from
             # the wall the entire time (forward arcs eat the backup distance)
             arc_ratio = 0.3
@@ -530,6 +570,31 @@ class WanderBehavior(Behavior):
         finally:
             self.robot._escape_in_progress = False
             self.robot.sensors.collision_detected = False
+
+        # Log outcome
+        if self.experience_logger and action_id:
+            await asyncio.sleep(0.2)
+            post_snapshot_id = self.experience_logger.log_sensor_snapshot_from_robot(self.robot)
+
+            if self.robot.sensors.collision_detected:
+                outcome_type = "collision"
+            elif self.robot.sensors.cliff_detected:
+                outcome_type = "cliff"
+            else:
+                outcome_type = "success"
+
+            self.experience_logger.log_outcome(
+                action_event_id=action_id,
+                outcome_type=outcome_type,
+                details={"angle_used": turn_angle, "backup_duration": 4.0},
+                sensor_snapshot_id=post_snapshot_id
+            )
+
+            if self.rules_store and applied_rule_id:
+                self.rules_store.record_rule_application(applied_rule_id, outcome_type == "success")
+
+            self._current_action_id = None
+            self._current_action_type = None
 
     async def _escape_cliff(self):
         """Escape from cliff detection - back up and turn away"""
