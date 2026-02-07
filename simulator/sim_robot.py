@@ -81,6 +81,21 @@ class SimSensorData:
         self.ext_roll = 0.0
         self.ext_yaw = 0.0
         self.ext_connected = True
+        # Internal accel/gyro (ExperienceLogger reads these)
+        self.accel_x = 0.0
+        self.accel_y = 0.0
+        self.accel_z = 0.0
+        self.gyro_x = 0.0
+        self.gyro_y = 0.0
+        self.gyro_z = 0.0
+        # External IMU raw data (ExperienceLogger reads these)
+        self.ext_ax_g = 0.0
+        self.ext_ay_g = 0.0
+        self.ext_az_g = 0.0
+        self.ext_gx_dps = 0.0
+        self.ext_gy_dps = 0.0
+        self.ext_gz_dps = 0.0
+        self.ext_ts_ms = 0
         # Pose fields (synced from physics)
         self.pose_x = 0.0
         self.pose_y = 0.0
@@ -216,6 +231,27 @@ class SimRobot:
         # Escape flag (mirrors CozmoRobot)
         self._escape_in_progress = False
         self._audio_playing = False
+
+    async def connect(self):
+        """Connect (compatibility with CozmoRobot) - starts physics."""
+        await self.start()
+        return True
+
+    async def disconnect(self):
+        """Disconnect (compatibility with CozmoRobot) - stops physics."""
+        await self.shutdown()
+
+    async def set_head_angle(self, angle: float):
+        """No-op: SimRobot has no head."""
+        self.sensors.head_angle = angle
+
+    async def set_lift_height(self, height: float):
+        """No-op: SimRobot has no lift."""
+        self.sensors.lift_height = height
+
+    async def capture_image(self):
+        """No-op: SimRobot has no camera. Returns None."""
+        return None
 
     async def start(self):
         """Start the physics simulation loop."""

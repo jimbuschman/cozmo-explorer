@@ -97,10 +97,102 @@ def dead_end(width=400, depth=500):
     )
 
 
+def multi_room():
+    """
+    Multi-room environment (~3m x 3m) for full-stack simulation.
+
+    Layout (top-down, Y increases upward):
+
+        +-------+   +-------+-------+
+        | Room C|   | Room B        |
+        |       D3  D2      |       |
+        +---+---+   +---+---+--+----+
+            |  Hallway          |
+        +---+---+   +-+--------+----+
+        |       D1  D4|  Dead end   |
+        | Room A|   | |  pocket     |
+        |       |   | +------+------+
+        +-------+   +-------+
+
+    3 rooms + hallway + dead-end pocket + furniture obstacles.
+    """
+    walls = []
+
+    # === Outer boundary (3000 x 3000 mm) ===
+    # Bottom wall
+    walls.append(Wall(0, 0, 3000, 0))
+    # Right wall
+    walls.append(Wall(3000, 0, 3000, 3000))
+    # Top wall
+    walls.append(Wall(3000, 3000, 0, 3000))
+    # Left wall
+    walls.append(Wall(0, 3000, 0, 0))
+
+    # === Horizontal divider (separates top rooms from hallway) at y=1800 ===
+    # Left section (Room A top / hallway bottom)
+    walls.append(Wall(0, 1800, 500, 1800))
+    # Gap = doorway D1 (500-700)
+    walls.append(Wall(700, 1800, 1300, 1800))
+    # Gap = doorway D4 to dead-end corridor (1300-1500)
+    walls.append(Wall(1500, 1800, 3000, 1800))
+
+    # === Horizontal divider (separates hallway from top rooms) at y=2200 ===
+    walls.append(Wall(0, 2200, 500, 2200))
+    # Gap = doorway D3 (500-700) into Room C
+    walls.append(Wall(700, 2200, 1300, 2200))
+    # Gap = doorway D2 (1300-1500) into Room B
+    walls.append(Wall(1500, 2200, 3000, 2200))
+
+    # === Room A (bottom-left, 0-1200 x 0-1800) ===
+    # Right wall of Room A
+    walls.append(Wall(1200, 0, 1200, 1800))
+
+    # === Dead-end pocket (bottom-right area, 1200-3000 x 0-1800) ===
+    # Inner pocket walls creating a U-shaped dead end
+    # Left wall of pocket interior
+    walls.append(Wall(1500, 0, 1500, 1200))
+    # Top wall of pocket interior
+    walls.append(Wall(1500, 1200, 2600, 1200))
+    # This creates a pocket: enter from doorway D4 (y=1800, x=1300-1500),
+    # go down into the space between x=1200-1500, then into the pocket
+
+    # === Room C (top-left, 0-1200 x 2200-3000) ===
+    # Right wall of Room C
+    walls.append(Wall(1200, 2200, 1200, 3000))
+
+    # === Room B (top-right, 1200-3000 x 2200-3000) ===
+    # Vertical divider inside Room B (furniture-like obstacle)
+    walls.append(Wall(2200, 2400, 2200, 2800))
+
+    # === Furniture obstacles ===
+    # Table in Room A (small box)
+    walls.append(Wall(400, 600, 700, 600))
+    walls.append(Wall(700, 600, 700, 900))
+    walls.append(Wall(700, 900, 400, 900))
+    walls.append(Wall(400, 900, 400, 600))
+
+    # Pillar in hallway
+    walls.append(Wall(1800, 1900, 1900, 1900))
+    walls.append(Wall(1900, 1900, 1900, 2100))
+    walls.append(Wall(1900, 2100, 1800, 2100))
+    walls.append(Wall(1800, 2100, 1800, 1900))
+
+    # L-shaped shelf in Room C
+    walls.append(Wall(200, 2500, 200, 2800))
+    walls.append(Wall(200, 2800, 600, 2800))
+
+    return World(
+        walls=walls,
+        name="multi_room_3x3",
+        spawn_x=600, spawn_y=1000, spawn_theta=0,  # Start in Room A
+    )
+
+
 # All presets indexed by number key
 PRESETS = {
     1: box_room,
     2: corridor,
     3: corner,
     4: dead_end,
+    5: multi_room,
 }
