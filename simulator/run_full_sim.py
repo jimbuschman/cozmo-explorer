@@ -246,8 +246,13 @@ async def run_room(
     sim_robot = SimRobot(world)
     await sim_robot.start()
 
-    # Fresh spatial map for each room
-    spatial_map = SpatialMap()
+    # Load existing map for this room if available, otherwise start fresh
+    map_path = config.DATA_DIR / f"sim_map_{room_id}.npz"
+    if map_path.exists():
+        spatial_map = SpatialMap.load(str(map_path))
+        logger.info(f"Loaded existing map for {room_id}: {spatial_map.get_visited_percentage()*100:.1f}% visited")
+    else:
+        spatial_map = SpatialMap()
 
     # Set room_id on experience logger
     experience_logger.set_room_id(room_id)
