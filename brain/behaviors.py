@@ -488,6 +488,7 @@ class WanderBehavior(Behavior):
             turn_angle = 160  # default magnitude
             if self.spatial_map:
                 x, y = self.robot.pose.x, self.robot.pose.y
+                heading_deg = math.degrees(self.robot.pose.angle)
                 target = self.spatial_map.find_nearest_frontier(x, y, min_distance=100)
                 if target:
                     target_angle = math.atan2(target[1] - y, target[0] - x)
@@ -498,8 +499,11 @@ class WanderBehavior(Behavior):
                     if abs(turn_angle) < 90:
                         turn_angle = 90 if turn_angle > 0 else -90
                     turn_angle = max(-180, min(180, turn_angle))
+                    logger.info(f"  Map: pos=({x:.0f},{y:.0f}) heading={heading_deg:.0f}° "
+                                f"frontier=({target[0]:.0f},{target[1]:.0f}) turn={turn_angle:.0f}°")
                 else:
                     turn_angle = self._pick_turn_direction(left_dist, right_dist, 160)
+                    logger.info(f"  Map: pos=({x:.0f},{y:.0f}) no frontier, sensor pick={turn_angle}°")
             else:
                 turn_angle = self._pick_turn_direction(left_dist, right_dist, 160)
 
