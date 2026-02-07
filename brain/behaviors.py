@@ -271,45 +271,25 @@ class WanderBehavior(Behavior):
                 left_dist = sensors.ext_ultra_l_mm
                 right_dist = sensors.ext_ultra_r_mm
 
-                # Emergency stop
+                # Emergency stop - use hard escape (long backup + big turn)
                 if 0 < front_dist < self.DANGER_DISTANCE:
                     logger.warning(f"Obstacle at {front_dist}mm, emergency reverse")
-                    self.robot._escape_in_progress = True
-                    await self.robot.stop()
-                    escape_speed = config.ESCAPE_SPEED
-                    backup_time = 1.5 if config.TRAILER_MODE else 0.5
-                    await self.robot.drive(-escape_speed, duration=backup_time)
-                    await asyncio.sleep(backup_time)
-                    turn_angle = self._pick_turn_direction(left_dist, right_dist, 120)
-                    await self.robot.escape_turn(turn_angle)
-                    self.robot._escape_in_progress = False
-                    sensors.collision_detected = False  # Clear flag from maneuver
+                    await self._escape_hard(left_dist, right_dist)
+                    sensors.collision_detected = False
                     turns_made += 1
-                    elapsed += backup_time + 1.0
-                    last_pose_x, last_pose_y = self.robot.pose.x, self.robot.pose.y
+                    elapsed += 4.0
                     stall_check_count = 0
                     last_yaw = self.robot.sensors.ext_yaw
                     last_front_dist = self.robot.sensors.get_front_obstacle_distance()
-                    escape_cooldown = 3.0  # Drive straight 3s before frontier steering
+                    escape_cooldown = 3.0
                     continue
 
-                # Caution zone - zigzag escape (sensor-aware forward-reverse arcs)
+                # Caution zone - backup and turn away
                 if 0 < front_dist < self.CAUTION_DISTANCE:
-                    direction = "left" if self._pick_turn_direction(left_dist, right_dist, 60) > 0 else "right"
-                    logger.info(f"Obstacle at {front_dist}mm, zigzag escape {direction}")
-                    self.robot._escape_in_progress = True
-                    try:
-                        zigzag = ZigzagManeuver(self.robot, sensors)
-                        result = await zigzag.execute(direction)
-                    finally:
-                        self.robot._escape_in_progress = False
-                    sensors.collision_detected = False
+                    logger.info(f"Obstacle at {front_dist}mm, backup+turn")
+                    await self._escape_hard(left_dist, right_dist)
                     turns_made += 1
-                    elapsed += result.duration
-                    if result.status == ManeuverStatus.FAILED:
-                        logger.warning("Zigzag failed, escalating to hard escape")
-                        await self._escape_hard(left_dist, right_dist)
-                        elapsed += 4.0
+                    elapsed += 4.0
                     stall_check_count = 0
                     last_yaw = self.robot.sensors.ext_yaw
                     last_front_dist = self.robot.sensors.get_front_obstacle_distance()
