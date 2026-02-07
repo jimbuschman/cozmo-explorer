@@ -41,19 +41,34 @@ class RuleCondition:
         if actual is None:
             return False
 
+        # Coerce value to match actual's type - LLM sometimes stores numbers as strings
+        value = self.value
+        try:
+            if isinstance(actual, (int, float)) and isinstance(value, str):
+                value = type(actual)(value)
+            elif isinstance(actual, str) and isinstance(value, (int, float)):
+                actual = type(value)(actual)
+        except (ValueError, TypeError):
+            return False
+
         if self.operator == "<":
-            return actual < self.value
+            return actual < value
         elif self.operator == ">":
-            return actual > self.value
+            return actual > value
         elif self.operator == "<=":
-            return actual <= self.value
+            return actual <= value
         elif self.operator == ">=":
-            return actual >= self.value
+            return actual >= value
         elif self.operator == "==":
-            return actual == self.value
+            return actual == value
         elif self.operator == "between":
-            if isinstance(self.value, list) and len(self.value) == 2:
-                return self.value[0] <= actual <= self.value[1]
+            if isinstance(value, list) and len(value) == 2:
+                try:
+                    lo = type(actual)(value[0]) if not isinstance(value[0], type(actual)) else value[0]
+                    hi = type(actual)(value[1]) if not isinstance(value[1], type(actual)) else value[1]
+                    return lo <= actual <= hi
+                except (ValueError, TypeError):
+                    return False
         return False
 
 
@@ -548,8 +563,36 @@ def _sanitize_condition(cond: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if isinstance(value, (int, float)):
         return cond
 
-    # If the value is a list (for "between"), check elements
+    # If the value is a numeric string, convert it
+    if isinstance(value, str):
+        try:
+            cond = dict(cond)  # copy so we don't mutate the original
+            cond["value"] = int(value)
+            return cond
+        except ValueError:
+            try:
+                cond = dict(cond)
+                cond["value"] = float(value)
+                return cond
+            except ValueError:
+                pass  # Fall through to category label handling
+
+    # If the value is a list (for "between"), coerce elements to numbers
     if isinstance(value, list):
+        coerced = []
+        for v in value:
+            if isinstance(v, str):
+                try:
+                    coerced.append(int(v))
+                except ValueError:
+                    try:
+                        coerced.append(float(v))
+                    except ValueError:
+                        coerced.append(v)
+            else:
+                coerced.append(v)
+        cond = dict(cond)
+        cond["value"] = coerced
         return cond
 
     # Convert string category labels to numeric conditions
