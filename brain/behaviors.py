@@ -307,9 +307,9 @@ class WanderBehavior(Behavior):
                     turns_made += 1
                     elapsed += result.duration
                     if result.status == ManeuverStatus.FAILED:
-                        logger.warning("Zigzag failed, escalating to stall escape")
-                        await self._escape_stall()
-                        elapsed += 2.0
+                        logger.warning("Zigzag failed, escalating to hard escape")
+                        await self._escape_hard(left_dist, right_dist)
+                        elapsed += 4.0
                     stall_check_count = 0
                     last_yaw = self.robot.sensors.ext_yaw
                     last_front_dist = self.robot.sensors.get_front_obstacle_distance()
@@ -479,6 +479,34 @@ class WanderBehavior(Behavior):
                 self.spatial_map.update_from_sensor(
                     x, y, heading, angle_offset, max_range, max_range
                 )
+
+    async def _escape_hard(self, left_dist: int, right_dist: int):
+        """
+        Aggressive escape when zigzag fails - long backup and big turn.
+
+        This is the last resort before the robot is truly stuck. Backs up
+        far enough to clear the trailer, then does a large turn away from
+        the obstacle using sensor data to pick direction.
+        """
+        self.robot._escape_in_progress = True
+        await self.robot.stop()
+
+        try:
+            escape_speed = config.ESCAPE_SPEED
+            # Back up for 3 seconds at escape speed = 300mm clearance
+            backup_time = 3.0
+            await self.robot.drive(-escape_speed, duration=backup_time)
+            await asyncio.sleep(backup_time)
+            await self.robot.stop()
+
+            # Turn 150-180 degrees away - basically turn around
+            turn_angle = self._pick_turn_direction(left_dist, right_dist, 160)
+            await self.robot.escape_turn(turn_angle)
+
+            logger.info(f"Hard escape: backed up {backup_time}s, turned {turn_angle}°")
+        finally:
+            self.robot._escape_in_progress = False
+            self.robot.sensors.collision_detected = False
 
     async def _escape_cliff(self):
         """Escape from cliff detection - back up and turn away"""
