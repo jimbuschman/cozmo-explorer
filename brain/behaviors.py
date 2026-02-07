@@ -372,17 +372,15 @@ class WanderBehavior(Behavior):
                         if abs(heading_error) > math.radians(20):
                             turn_angle = max(-60, min(60, math.degrees(heading_error)))
                             await self.robot.stop()
-                            await self.robot.turn(turn_angle)
+                            await self._turn_with_mapping(turn_angle)
                             turns_made += 1
                             elapsed += abs(turn_angle) / 45
                             stall_check_count = 0
                     else:
                         # All frontiers explored - random turn
                         await self.robot.stop()
-                        turn_angle = random.uniform(-60, 60)
-                        await self.robot.turn(turn_angle)
+                        await self._turn_with_mapping(random.uniform(-60, 60))
                         turns_made += 1
-                        elapsed += abs(turn_angle) / 45
                         stall_check_count = 0
                 else:
                     # No map - random turn
@@ -423,6 +421,34 @@ class WanderBehavior(Behavior):
         if not right_valid:
             return -magnitude  # Turn right toward unknown (might be open)
         return magnitude if left_dist > right_dist else -magnitude
+
+    async def _turn_with_mapping(self, angle: float, speed: float = 30.0):
+        """Turn while continuously updating the map from sensor sweeps."""
+        ratio = config.TRAILER_ARC_RATIO if config.TRAILER_MODE else 0.0
+        total_duration = abs(angle) / speed * 2.0 if config.TRAILER_MODE else abs(angle) / speed
+        step = 0.15  # Same interval as main loop
+
+        # Start the turn by setting wheels
+        if config.TRAILER_MODE:
+            if angle > 0:
+                await self.robot.set_wheels(speed * ratio, speed)
+            else:
+                await self.robot.set_wheels(speed, speed * ratio)
+        else:
+            if angle > 0:
+                await self.robot.set_wheels(-speed, speed)
+            else:
+                await self.robot.set_wheels(speed, -speed)
+
+        elapsed = 0.0
+        while elapsed < total_duration:
+            await asyncio.sleep(step)
+            elapsed += step
+            # Map during the turn
+            if self.spatial_map and self.robot.sensors.ext_connected:
+                self._update_map(self.robot.sensors)
+
+        await self.robot.stop()
 
     def _update_map(self, sensors):
         """Update the spatial map from current sensor readings."""
