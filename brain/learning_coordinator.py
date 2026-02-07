@@ -247,6 +247,13 @@ class LearningCoordinator:
         try:
             rule = create_rule_from_proposal(proposal)
 
+            # Check for duplicate by name
+            existing = self.rules_store.get_all_rules()
+            for existing_rule in existing:
+                if existing_rule.name == rule.name:
+                    logger.info(f"Skipping duplicate rule: '{rule.name}' (already exists as id={existing_rule.id})")
+                    return None
+
             # Safety check
             is_safe, reason = self.rules_store.is_rule_safe(rule)
             if not is_safe:
@@ -265,14 +272,6 @@ class LearningCoordinator:
             rule_id = self.rules_store.add_rule(rule)
             rule.id = rule_id
 
-            # Initialize testing stats
-            self._testing_rules[rule_id] = {
-                'started': datetime.now(),
-                'tests': 0,
-                'successes': 0,
-                'baseline_rate': self._get_baseline_success_rate()
-            }
-
             logger.info(f"Stored proposed rule: {rule.name} (id={rule_id})")
             return rule
 
@@ -287,43 +286,43 @@ class LearningCoordinator:
 
     async def validate_proposal(self, rule_id: int) -> Optional[ValidationResult]:
         """
-        Validate a proposed rule based on test results.
+        Validate a proposed rule based on test results from the DB.
 
-        Call this periodically or after sufficient tests have been recorded.
+        Uses times_applied/times_successful from the database (written by
+        behaviors.py record_rule_application) so stats survive restarts.
         """
         rule = self.rules_store.get_rule(rule_id)
         if not rule:
             return None
 
-        test_stats = self._testing_rules.get(rule_id)
-        if not test_stats:
-            return None
+        tests = rule.times_applied
+        successes = rule.times_successful
 
         # Check if we have enough samples
-        if test_stats['tests'] < self.MIN_SAMPLES_FOR_VALIDATION:
-            # Check for timeout
-            elapsed = datetime.now() - test_stats['started']
-            if elapsed > timedelta(hours=self.VALIDATION_TIMEOUT_HOURS):
-                logger.warning(f"Rule {rule_id} timed out during validation")
-                self.rules_store.update_rule_status(rule_id, "rejected", {
-                    'reason': 'timeout',
-                    'tests': test_stats['tests']
-                })
-                del self._testing_rules[rule_id]
-                return ValidationResult(
-                    rule_id=rule_id,
-                    passed=False,
-                    success_rate=0,
-                    sample_size=test_stats['tests'],
-                    baseline_rate=test_stats['baseline_rate'],
-                    improvement=0,
-                    details="Timed out before enough tests"
-                )
+        if tests < self.MIN_SAMPLES_FOR_VALIDATION:
+            # Check for timeout based on proposed_at
+            if rule.proposed_at:
+                elapsed = datetime.now() - rule.proposed_at
+                if elapsed > timedelta(hours=self.VALIDATION_TIMEOUT_HOURS):
+                    logger.warning(f"Rule {rule_id} timed out during validation")
+                    self.rules_store.update_rule_status(rule_id, "rejected", {
+                        'reason': 'timeout',
+                        'tests': tests
+                    })
+                    return ValidationResult(
+                        rule_id=rule_id,
+                        passed=False,
+                        success_rate=0,
+                        sample_size=tests,
+                        baseline_rate=self._get_baseline_success_rate(),
+                        improvement=0,
+                        details="Timed out before enough tests"
+                    )
             return None  # Still collecting data
 
         # Calculate results
-        success_rate = test_stats['successes'] / test_stats['tests']
-        baseline = test_stats['baseline_rate']
+        success_rate = successes / tests
+        baseline = self._get_baseline_success_rate()
         improvement = success_rate - baseline
 
         # Validation criteria
@@ -336,7 +335,7 @@ class LearningCoordinator:
             rule_id=rule_id,
             passed=passed,
             success_rate=success_rate,
-            sample_size=test_stats['tests'],
+            sample_size=tests,
             baseline_rate=baseline,
             improvement=improvement,
             details=f"Success rate: {success_rate:.1%}, baseline: {baseline:.1%}, improvement: {improvement:+.1%}"
@@ -347,27 +346,27 @@ class LearningCoordinator:
             self.rules_store.update_rule_status(rule_id, "validated", {
                 'success_rate': success_rate,
                 'improvement': improvement,
-                'sample_size': test_stats['tests']
+                'sample_size': tests
             })
             logger.info(f"Rule {rule_id} VALIDATED: {result.details}")
         else:
             self.rules_store.update_rule_status(rule_id, "rejected", {
                 'success_rate': success_rate,
                 'improvement': improvement,
-                'sample_size': test_stats['tests'],
+                'sample_size': tests,
                 'reason': 'insufficient_improvement'
             })
             logger.info(f"Rule {rule_id} REJECTED: {result.details}")
 
-        del self._testing_rules[rule_id]
         return result
 
     def record_test_result(self, rule_id: int, success: bool):
-        """Record a test result for a rule being validated"""
-        if rule_id in self._testing_rules:
-            self._testing_rules[rule_id]['tests'] += 1
-            if success:
-                self._testing_rules[rule_id]['successes'] += 1
+        """Record a test result for a rule being validated.
+
+        Note: This is now handled by rules_store.record_rule_application()
+        called directly from behaviors.py. Kept for backward compatibility.
+        """
+        self.rules_store.record_rule_application(rule_id, success)
 
     def activate_validated_rules(self) -> List[int]:
         """Activate all validated rules"""
@@ -394,20 +393,18 @@ class LearningCoordinator:
         return stats.get('total', 0) >= self.MIN_SAMPLES_FOR_ANALYSIS
 
     def get_testing_rules(self) -> List[Dict]:
-        """Get info about rules currently being tested"""
+        """Get info about rules currently being tested (from DB)"""
+        testing_rules = self.rules_store.get_rules_by_status("testing")
         result = []
-        for rule_id, stats in self._testing_rules.items():
-            rule = self.rules_store.get_rule(rule_id)
-            if rule:
-                result.append({
-                    'rule_id': rule_id,
-                    'name': rule.name,
-                    'tests': stats['tests'],
-                    'successes': stats['successes'],
-                    'success_rate': stats['successes'] / stats['tests'] if stats['tests'] > 0 else 0,
-                    'baseline': stats['baseline_rate'],
-                    'started': stats['started'].isoformat()
-                })
+        for rule in testing_rules:
+            result.append({
+                'rule_id': rule.id,
+                'name': rule.name,
+                'tests': rule.times_applied,
+                'successes': rule.times_successful,
+                'success_rate': rule.success_rate,
+                'proposed_at': rule.proposed_at.isoformat() if rule.proposed_at else None
+            })
         return result
 
     def get_status_summary(self) -> Dict[str, Any]:
@@ -424,7 +421,7 @@ class LearningCoordinator:
         return {
             'total_rules': len(all_rules),
             'by_status': by_status,
-            'testing': len(self._testing_rules),
+            'testing': by_status.get('testing', 0),
             'last_analysis': self._last_analysis_time.isoformat() if self._last_analysis_time else None,
             'data_samples': self.experience_logger.get_recovery_statistics("escape_stall").get('total', 0)
         }
