@@ -358,34 +358,34 @@ class WanderBehavior(Behavior):
             stall_check_count += 1
 
             # === EXPLORATION (frontier-directed or random) ===
-            if self.spatial_map:
-                x, y = self.robot.pose.x, self.robot.pose.y
-                target = self.spatial_map.find_nearest_frontier(x, y, min_distance=100)
-                if target:
-                    target_angle = math.atan2(target[1] - y, target[0] - x)
-                    heading_error = target_angle - self.robot.pose.angle
-                    # Normalize to [-pi, pi]
-                    heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
-                    # Only turn if heading is significantly off (>20 degrees)
-                    if abs(heading_error) > math.radians(20):
-                        turn_angle = max(-60, min(60, math.degrees(heading_error)))
-                        await self.robot.stop()
-                        await self.robot.turn(turn_angle)
-                        turns_made += 1
-                        elapsed += abs(turn_angle) / 45
-                        stall_check_count = 0
-                else:
-                    # All frontiers explored or none reachable - random wander
-                    if random.random() < self.turn_probability:
+            # Only consider turning at the same rate as old random turns
+            if random.random() < self.turn_probability:
+                if self.spatial_map:
+                    x, y = self.robot.pose.x, self.robot.pose.y
+                    target = self.spatial_map.find_nearest_frontier(x, y, min_distance=100)
+                    if target:
+                        target_angle = math.atan2(target[1] - y, target[0] - x)
+                        heading_error = target_angle - self.robot.pose.angle
+                        # Normalize to [-pi, pi]
+                        heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
+                        # Only turn if heading is significantly off (>20 degrees)
+                        if abs(heading_error) > math.radians(20):
+                            turn_angle = max(-60, min(60, math.degrees(heading_error)))
+                            await self.robot.stop()
+                            await self.robot.turn(turn_angle)
+                            turns_made += 1
+                            elapsed += abs(turn_angle) / 45
+                            stall_check_count = 0
+                    else:
+                        # All frontiers explored - random turn
                         await self.robot.stop()
                         turn_angle = random.uniform(-60, 60)
                         await self.robot.turn(turn_angle)
                         turns_made += 1
                         elapsed += abs(turn_angle) / 45
                         stall_check_count = 0
-            else:
-                # No map - fall back to random
-                if random.random() < self.turn_probability:
+                else:
+                    # No map - random turn
                     await self.robot.stop()
                     turn_angle = random.uniform(-60, 60)
                     await self.robot.turn(turn_angle)

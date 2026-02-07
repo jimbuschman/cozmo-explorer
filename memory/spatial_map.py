@@ -6,6 +6,7 @@ and what's in the environment.
 """
 import logging
 import math
+import random
 import numpy as np
 from typing import Tuple, List, Optional
 from dataclasses import dataclass
@@ -248,6 +249,8 @@ class SpatialMap:
         min_r = int(min_distance / self.resolution)
 
         for r in range(min_r, max_radius):
+            # Collect all frontiers at this radius, then pick randomly
+            candidates = []
             for dx in range(-r, r + 1):
                 for dy in range(-r, r + 1):
                     if abs(dx) != r and abs(dy) != r:
@@ -264,7 +267,12 @@ class SpatialMap:
                     for nx, ny in [(cx-1, cy), (cx+1, cy), (cx, cy-1), (cx, cy+1)]:
                         if 0 <= nx < self.width and 0 <= ny < self.height:
                             if self.grid[ny, nx] in (CellState.FREE, CellState.VISITED):
-                                return self.grid_to_world(cx, cy)
+                                candidates.append((cx, cy))
+                                break
+
+            if candidates:
+                pick = random.choice(candidates)
+                return self.grid_to_world(pick[0], pick[1])
 
         return None
 
