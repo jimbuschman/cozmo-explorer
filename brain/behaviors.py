@@ -21,6 +21,7 @@ from brain.maneuvers import ZigzagManeuver, ManeuverStatus
 if TYPE_CHECKING:
     from memory.experience_logger import ExperienceLogger
     from memory.learned_rules import LearnedRulesStore
+    from memory.spatial_map import SpatialMap
 
 logger = logging.getLogger(__name__)
 
@@ -166,9 +167,9 @@ class WanderBehavior(Behavior):
     """
 
     # Distance thresholds (mm)
-    DANGER_DISTANCE = 80      # Emergency stop
-    SLOW_DISTANCE = 150       # Slow down
-    CAUTION_DISTANCE = 250    # Start looking for alternatives
+    DANGER_DISTANCE = 80      # Emergency stop + reverse
+    CAUTION_DISTANCE = 250    # Zigzag escape
+    STEER_DISTANCE = 600      # Proactive steering (curve away while driving)
 
     # Default recovery angles (data shows 120°+ works, 90° never succeeds with trailer)
     DEFAULT_STALL_ANGLES = [-120, -135, 120, 135]
@@ -181,7 +182,8 @@ class WanderBehavior(Behavior):
         speed: float = 50.0,
         turn_probability: float = 0.1,
         experience_logger: "ExperienceLogger" = None,
-        rules_store: "LearnedRulesStore" = None
+        rules_store: "LearnedRulesStore" = None,
+        spatial_map: "SpatialMap" = None
     ):
         super().__init__(robot)
         self.duration = duration
@@ -189,6 +191,7 @@ class WanderBehavior(Behavior):
         self.turn_probability = turn_probability
         self.experience_logger = experience_logger
         self.rules_store = rules_store
+        self.spatial_map = spatial_map
 
         # Track current action for outcome logging
         self._current_action_id: Optional[int] = None
@@ -256,6 +259,10 @@ class WanderBehavior(Behavior):
                     continue
             else:
                 tilt_consecutive = 0
+
+            # === MAP UPDATE ===
+            if has_distance_sensors and self.spatial_map:
+                self._update_map(sensors)
 
             # === PROACTIVE OBSTACLE AVOIDANCE ===
             if has_distance_sensors:
@@ -350,15 +357,41 @@ class WanderBehavior(Behavior):
 
             stall_check_count += 1
 
-            # === RANDOM EXPLORATION ===
-            if random.random() < self.turn_probability:
-                await self.robot.stop()
-                turn_angle = random.uniform(-60, 60)
-                await self.robot.turn(turn_angle)
-                turns_made += 1
-                elapsed += abs(turn_angle) / 45
-                last_pose_x, last_pose_y = self.robot.pose.x, self.robot.pose.y
-                stall_check_count = 0
+            # === EXPLORATION (frontier-directed or random) ===
+            if self.spatial_map:
+                x, y = self.robot.pose.x, self.robot.pose.y
+                target = self.spatial_map.find_nearest_frontier(x, y, min_distance=100)
+                if target:
+                    target_angle = math.atan2(target[1] - y, target[0] - x)
+                    heading_error = target_angle - self.robot.pose.angle
+                    # Normalize to [-pi, pi]
+                    heading_error = (heading_error + math.pi) % (2 * math.pi) - math.pi
+                    # Only turn if heading is significantly off (>20 degrees)
+                    if abs(heading_error) > math.radians(20):
+                        turn_angle = max(-60, min(60, math.degrees(heading_error)))
+                        await self.robot.stop()
+                        await self.robot.turn(turn_angle)
+                        turns_made += 1
+                        elapsed += abs(turn_angle) / 45
+                        stall_check_count = 0
+                else:
+                    # All frontiers explored or none reachable - random wander
+                    if random.random() < self.turn_probability:
+                        await self.robot.stop()
+                        turn_angle = random.uniform(-60, 60)
+                        await self.robot.turn(turn_angle)
+                        turns_made += 1
+                        elapsed += abs(turn_angle) / 45
+                        stall_check_count = 0
+            else:
+                # No map - fall back to random
+                if random.random() < self.turn_probability:
+                    await self.robot.stop()
+                    turn_angle = random.uniform(-60, 60)
+                    await self.robot.turn(turn_angle)
+                    turns_made += 1
+                    elapsed += abs(turn_angle) / 45
+                    stall_check_count = 0
 
             # === DRIVE ===
             await self.robot.drive(current_speed)
@@ -390,6 +423,27 @@ class WanderBehavior(Behavior):
         if not right_valid:
             return -magnitude  # Turn right toward unknown (might be open)
         return magnitude if left_dist > right_dist else -magnitude
+
+    def _update_map(self, sensors):
+        """Update the spatial map from current sensor readings."""
+        x, y = self.robot.pose.x, self.robot.pose.y
+        heading = self.robot.pose.angle
+        self.spatial_map.mark_visited(x, y)
+
+        for name, reading, max_range, angle_offset in [
+            ("tof", sensors.ext_tof_mm, 2000, 0),
+            ("ultra_c", sensors.ext_ultra_c_mm, 4000, 0),
+            ("ultra_l", sensors.ext_ultra_l_mm, 4000, math.radians(15)),
+            ("ultra_r", sensors.ext_ultra_r_mm, 4000, math.radians(-15)),
+        ]:
+            if 0 < reading < max_range:
+                self.spatial_map.update_from_sensor(
+                    x, y, heading, angle_offset, reading, max_range
+                )
+            elif reading >= max_range:
+                self.spatial_map.update_from_sensor(
+                    x, y, heading, angle_offset, max_range, max_range
+                )
 
     async def _escape_cliff(self):
         """Escape from cliff detection - back up and turn away"""
@@ -864,11 +918,13 @@ class BehaviorFactory:
         self,
         robot: CozmoRobot,
         experience_logger: "ExperienceLogger" = None,
-        rules_store: "LearnedRulesStore" = None
+        rules_store: "LearnedRulesStore" = None,
+        spatial_map: "SpatialMap" = None
     ):
         self.robot = robot
         self.experience_logger = experience_logger
         self.rules_store = rules_store
+        self.spatial_map = spatial_map
 
     def stop(self) -> StopBehavior:
         return StopBehavior(self.robot)
@@ -889,7 +945,8 @@ class BehaviorFactory:
             duration,
             speed,
             experience_logger=self.experience_logger,
-            rules_store=self.rules_store
+            rules_store=self.rules_store,
+            spatial_map=self.spatial_map
         )
 
     def look_around(self, capture_images: bool = True) -> LookAroundBehavior:

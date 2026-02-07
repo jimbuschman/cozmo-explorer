@@ -294,9 +294,6 @@ class CozmoExplorer:
             goal_type="explore"
         ))
 
-        # Position tracking for map updates
-        last_x, last_y = 0, 0
-
         try:
             # Set head to look forward (not down)
             await self.robot.set_head_angle(0.35)  # Look up/forward
@@ -335,12 +332,6 @@ class CozmoExplorer:
 
                 # Refresh pose from pycozmo
                 self.robot._update_pose_from_client()
-
-                # Update spatial map with current position (even in manual mode)
-                x, y = self.robot.pose.x, self.robot.pose.y
-                if abs(x - last_x) > 10 or abs(y - last_y) > 10:
-                    self.spatial_map.mark_visited(x, y)
-                    last_x, last_y = x, y
 
                 # Start/stop state machine based on mode changes
                 if not self._manual_mode and state_task is None:

@@ -26,6 +26,9 @@ ORANGE = (255, 160, 40)
 LIGHT_BLUE = (140, 200, 255)
 TRAIL_COLOR = (80, 80, 180)
 WALL_COLOR = (200, 200, 200)
+MAP_FREE_COLOR = (40, 100, 40)
+MAP_OCCUPIED_COLOR = (200, 50, 50)
+MAP_VISITED_COLOR = (50, 50, 150)
 
 # Danger/caution thresholds (mm) - should match WanderBehavior
 DANGER_DISTANCE = 80
@@ -35,7 +38,7 @@ CAUTION_DISTANCE = 250
 class Renderer:
     """Pygame-based top-down view of the simulated world."""
 
-    def __init__(self, width=900, height=700):
+    def __init__(self, width=900, height=700, spatial_map=None):
         if pygame is None:
             raise RuntimeError("pygame not installed")
 
@@ -53,6 +56,8 @@ class Renderer:
         self.offset_x = width / 2
         self.offset_y = height / 2
 
+        self.spatial_map = spatial_map
+
         self.paused = False
         self.speed_multiplier = 1.0
         self.status_text = ""
@@ -63,12 +68,52 @@ class Renderer:
         sy = int(-wy * self.scale + self.offset_y)  # Flip Y
         return sx, sy
 
+    def _draw_occupancy_grid(self):
+        """Draw the spatial map occupancy grid as a background overlay."""
+        if self.spatial_map is None:
+            return
+
+        from memory.spatial_map import CellState
+
+        grid = self.spatial_map.grid
+        res = self.spatial_map.resolution
+        pixel_size = max(1, int(res * self.scale))
+
+        for gy in range(self.spatial_map.height):
+            for gx in range(self.spatial_map.width):
+                cell = grid[gy, gx]
+                if cell == CellState.UNKNOWN:
+                    continue
+
+                wx, wy = self.spatial_map.grid_to_world(gx, gy)
+                sx, sy = self.world_to_screen(wx, wy)
+
+                if cell == CellState.FREE:
+                    color = MAP_FREE_COLOR
+                elif cell == CellState.OCCUPIED:
+                    color = MAP_OCCUPIED_COLOR
+                elif cell == CellState.VISITED:
+                    color = MAP_VISITED_COLOR
+                else:
+                    continue
+
+                rect = pygame.Rect(
+                    sx - pixel_size // 2,
+                    sy - pixel_size // 2,
+                    pixel_size,
+                    pixel_size,
+                )
+                pygame.draw.rect(self.screen, color, rect)
+
     def draw(self, sim_robot, maneuver_status=""):
         """Draw one frame."""
         self.screen.fill(DARK_GRAY)
 
         state = sim_robot.state
         world = sim_robot.world
+
+        # Draw occupancy grid (background layer)
+        self._draw_occupancy_grid()
 
         # Draw walls
         for wall in world.walls:
@@ -133,6 +178,11 @@ class Renderer:
             f"L: {sim_robot.sensors.ext_ultra_l_mm} mm  "
             f"R: {sim_robot.sensors.ext_ultra_r_mm} mm",
         ]
+        if self.spatial_map:
+            hud_lines.append(
+                f"Map: {self.spatial_map.get_exploration_progress()*100:.1f}% explored  "
+                f"{self.spatial_map.get_visited_percentage()*100:.1f}% visited"
+            )
         if maneuver_status:
             hud_lines.append(f"Maneuver: {maneuver_status}")
         if self.paused:

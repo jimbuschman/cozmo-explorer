@@ -24,6 +24,7 @@ import config
 from simulator.sim_robot import SimRobot
 from simulator.world import PRESETS, box_room
 from simulator.renderer import Renderer
+from memory.spatial_map import SpatialMap
 
 logging.basicConfig(
     level=logging.INFO,
@@ -50,7 +51,7 @@ async def run_zigzag(sim_robot):
     return await maneuver.execute(direction)
 
 
-async def run_wander(sim_robot):
+async def run_wander(sim_robot, spatial_map=None):
     """Run WanderBehavior autonomously - same code as the real robot."""
     from brain.behaviors import WanderBehavior
 
@@ -59,6 +60,7 @@ async def run_wander(sim_robot):
         duration=600.0,  # 10 minutes - long run to observe behavior
         speed=config.WANDER_SPEED,
         turn_probability=0.1,
+        spatial_map=spatial_map,
     )
     logger.info("Autonomous wander started")
     result = await wander.run()
@@ -69,7 +71,8 @@ async def run_wander(sim_robot):
 async def main():
     world = box_room()
     sim_robot = SimRobot(world)
-    renderer = Renderer()
+    spatial_map = SpatialMap()
+    renderer = Renderer(spatial_map=spatial_map)
 
     await sim_robot.start()
 
@@ -97,6 +100,8 @@ async def main():
             if actions.get('reset'):
                 cancel_behavior()
                 sim_robot.reset()
+                spatial_map = SpatialMap()
+                renderer.spatial_map = spatial_map
 
             if 'world_preset' in actions:
                 preset_num = actions['world_preset']
@@ -104,6 +109,8 @@ async def main():
                     cancel_behavior()
                     world = PRESETS[preset_num]()
                     sim_robot.reset(world)
+                    spatial_map = SpatialMap()
+                    renderer.spatial_map = spatial_map
                     maneuver_status = f"Loaded: {world.name}"
 
             # Toggle autonomous wander
@@ -116,7 +123,7 @@ async def main():
                     cancel_behavior()
                     auto_mode = True
                     maneuver_status = "AUTO WANDER"
-                    behavior_task = asyncio.create_task(run_wander(sim_robot))
+                    behavior_task = asyncio.create_task(run_wander(sim_robot, spatial_map))
 
             # Manual zigzag trigger (only when not in auto mode)
             if actions.get('zigzag') and not auto_mode:

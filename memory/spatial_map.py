@@ -5,6 +5,7 @@ Simple occupancy grid for tracking where the robot has been
 and what's in the environment.
 """
 import logging
+import math
 import numpy as np
 from typing import Tuple, List, Optional
 from dataclasses import dataclass
@@ -149,6 +150,123 @@ class SpatialMap:
             if dist <= radius:
                 nearby.append(point)
         return nearby
+
+    def update_from_sensor(
+        self,
+        robot_x: float,
+        robot_y: float,
+        robot_heading: float,
+        sensor_angle_offset: float,
+        distance_mm: float,
+        max_range: float
+    ):
+        """
+        Ray-trace a sensor reading onto the grid.
+
+        Marks cells along the ray as FREE and the endpoint as OCCUPIED
+        (if the reading is less than max_range).
+
+        Args:
+            robot_x, robot_y: Robot position in mm
+            robot_heading: Robot heading in radians
+            sensor_angle_offset: Sensor mounting angle offset in radians
+            distance_mm: Measured distance in mm
+            max_range: Maximum sensor range in mm
+        """
+        absolute_angle = robot_heading + sensor_angle_offset
+
+        if distance_mm < max_range:
+            # Obstacle detected - mark endpoint as OCCUPIED, ray as FREE
+            obs_x = robot_x + distance_mm * math.cos(absolute_angle)
+            obs_y = robot_y + distance_mm * math.sin(absolute_angle)
+            self.mark_occupied(obs_x, obs_y)
+            self.ray_mark_free(robot_x, robot_y, obs_x, obs_y)
+        else:
+            # No obstacle - mark entire ray as FREE
+            end_x = robot_x + max_range * math.cos(absolute_angle)
+            end_y = robot_y + max_range * math.sin(absolute_angle)
+            self.ray_mark_free(robot_x, robot_y, end_x, end_y)
+
+    def ray_mark_free(
+        self,
+        x1: float, y1: float,
+        x2: float, y2: float
+    ):
+        """
+        Mark grid cells along a ray as FREE using Bresenham's line algorithm.
+
+        Cells already marked as VISITED are not overwritten.
+        The endpoint cell is NOT marked (it may be OCCUPIED).
+        """
+        gx1, gy1 = self.world_to_grid(x1, y1)
+        gx2, gy2 = self.world_to_grid(x2, y2)
+
+        dx = abs(gx2 - gx1)
+        dy = abs(gy2 - gy1)
+        sx = 1 if gx1 < gx2 else -1
+        sy = 1 if gy1 < gy2 else -1
+        err = dx - dy
+
+        cx, cy = gx1, gy1
+        while True:
+            # Don't mark the endpoint (it might be an obstacle)
+            if cx == gx2 and cy == gy2:
+                break
+            # Mark as FREE if not already VISITED
+            if 0 <= cx < self.width and 0 <= cy < self.height:
+                if self.grid[cy, cx] != CellState.VISITED:
+                    self.grid[cy, cx] = CellState.FREE
+            e2 = 2 * err
+            if e2 > -dy:
+                err -= dy
+                cx += sx
+            if e2 < dx:
+                err += dx
+                cy += sy
+
+    def find_nearest_frontier(
+        self,
+        x: float,
+        y: float,
+        min_distance: float = 100.0
+    ) -> Optional[Tuple[float, float]]:
+        """
+        Find the nearest frontier cell (UNKNOWN cell adjacent to FREE/VISITED).
+
+        Unlike find_nearest_unknown(), this only returns cells that are
+        actually reachable - on the boundary between known and unknown space.
+
+        Args:
+            x, y: Current position in mm
+            min_distance: Minimum search distance in mm
+
+        Returns:
+            (x, y) of nearest frontier cell, or None if none found
+        """
+        gx, gy = self.world_to_grid(x, y)
+        max_radius = max(self.width, self.height)
+        min_r = int(min_distance / self.resolution)
+
+        for r in range(min_r, max_radius):
+            for dx in range(-r, r + 1):
+                for dy in range(-r, r + 1):
+                    if abs(dx) != r and abs(dy) != r:
+                        continue
+
+                    cx, cy = gx + dx, gy + dy
+                    if cx < 0 or cx >= self.width or cy < 0 or cy >= self.height:
+                        continue
+
+                    if self.grid[cy, cx] != CellState.UNKNOWN:
+                        continue
+
+                    # Check if adjacent to FREE or VISITED
+                    for nx, ny in [(cx-1, cy), (cx+1, cy), (cx, cy-1), (cx, cy+1)]:
+                        if 0 <= nx < self.width and 0 <= ny < self.height:
+                            if self.grid[ny, nx] in (CellState.FREE, CellState.VISITED):
+                                return self.grid_to_world(cx, cy)
+
+        return None
 
     def find_nearest_unknown(
         self,

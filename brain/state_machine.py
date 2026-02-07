@@ -102,7 +102,8 @@ class StateMachine:
         self.behaviors = BehaviorFactory(
             robot,
             experience_logger=experience_logger,
-            rules_store=rules_store
+            rules_store=rules_store,
+            spatial_map=spatial_map
         )
         self.state = RobotState.IDLE
         self.context = StateContext()
