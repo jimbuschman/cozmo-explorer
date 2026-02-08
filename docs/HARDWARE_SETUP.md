@@ -160,12 +160,14 @@ Each robot consists of:
 
 **Purpose**: Buffer, timestamp, and forward sensor data
 
-**Responsibilities**:
+**Responsibilities** (future multi-robot setup):
 1. Receive WiFi data from multiple ESP32/Arduino units
 2. Add server timestamp to each message
 3. Buffer messages in queue (handle network hiccups)
 4. Forward to main PC over Ethernet
 5. Handle reconnection if robots disconnect
+
+**Note**: Currently not used. ESP32 sends UDP directly to the PC. The Pi becomes useful when adding a second robot or needing more reliable data buffering.
 
 **Why a Pi?**
 - Reliable WiFi receiver
@@ -231,16 +233,16 @@ Each robot consists of:
 
 **Responsibilities**:
 1. Run the main cozmo-explorer Python code
-2. Learning system (experience logging, pattern analysis, rules)
-3. State machine (behavior control)
-4. Map building and storage
-5. Database (SQLite → maybe PostgreSQL later)
-6. Coordinate multiple robots (Phase 3)
+2. MapperStateMachine + FrontierNavigator (autonomous mapping)
+3. Spatial map building and storage (occupancy grid)
+4. Database (SQLite - state, annotations, experience logs)
+5. Post-session LLM review (Ollama)
+6. Coordinate multiple robots (future)
 
 **Why separate from Pi?**
-- More CPU/RAM for learning algorithms
+- More CPU/RAM for map processing
 - Larger storage for database and images
-- Can run heavier analysis
+- Can run LLM locally
 - Easier to develop on
 
 ---
@@ -262,23 +264,16 @@ Each robot consists of:
 
 ## Hardware Progression - When to Add What
 
-### Phase 1 (NOW) ← YOU ARE HERE
+### Current Setup ← YOU ARE HERE
 ```
-1 Cozmo + ESP32 ──USB Serial──> Main PC (runs everything + Ollama)
+1 Cozmo + trailer + ESP32 ──WiFi UDP──> Main PC (runs everything + Ollama)
 ```
-- **Hardware**: PC + Cozmo + ESP32 via USB
-- **Why this works**: Simple, reliable, no WiFi complexity for sensors
-- **Don't add yet**: Pi, separate LLM server, WiFi for ESP32
+- **Hardware**: PC + Cozmo + ESP32 via WiFi UDP (port 5000)
+- **Software**: MapperStateMachine + FrontierNavigator (autonomous mapping)
+- **Why this works**: Simple, untethered, ESP32 broadcasts sensor data over WiFi
+- **Don't add yet**: Pi, separate LLM server
 
-### Phase 1.5 (When ESP32 goes wireless)
-```
-1 Cozmo + ESP32 ──WiFi──> Main PC
-```
-- **Trigger**: Want untethered sensor pod
-- **Add**: WiFi capability to ESP32
-- **Still don't need**: Pi (PC can receive WiFi directly)
-
-### Phase 2 (When adding second robot OR wanting robustness)
+### Future: Multi-Robot (When adding second robot OR wanting robustness)
 ```
 Multiple Cozmos + ESP32s ──WiFi──> Raspberry Pi ──Ethernet──> Main PC
 ```
@@ -286,7 +281,7 @@ Multiple Cozmos + ESP32s ──WiFi──> Raspberry Pi ──Ethernet──> Ma
 - **Add**: Raspberry Pi as edge aggregator
 - **Why Pi now**: Multiple WiFi sources, buffering, central timestamp
 
-### Phase 3 (When scaling up)
+### Future: Scaling Up
 ```
 Multiple Cozmos + ESP32s ──WiFi──> Raspberry Pi ──Ethernet──> Main PC
                                                                   │
@@ -327,13 +322,13 @@ Pi acts as WiFi access point for robots.
 
 ## Hardware Shopping List
 
-### Phase 1 - You Have This (USE NOW)
-- [x] 1 Cozmo robot
+### Current Setup (Have This)
+- [x] 1 Cozmo robot + trailer
 - [x] 1 ESP32 DevKit + sensors (ToF, ultrasonics, IMU)
+- [x] 1 Arduino Nano (relay for ESP32 power)
 - [x] Main PC
-- [x] USB cable for ESP32
 
-### Phase 2 - Buy When Adding Second Robot
+### Future: Buy When Adding Second Robot
 - [ ] Raspberry Pi 4B+ (4GB or 8GB)
 - [ ] Ethernet cable
 - [ ] MicroSD card (32GB+)
@@ -342,7 +337,7 @@ Pi acts as WiFi access point for robots.
 - [ ] Additional ESP32/Arduino sensor unit
 - [ ] USB WiFi adapter (for second Cozmo control from PC)
 
-### Phase 3 - Buy When Scaling
+### Future: Buy When Scaling
 - [ ] More Cozmo robots
 - [ ] More sensor units
 - [ ] More USB WiFi adapters

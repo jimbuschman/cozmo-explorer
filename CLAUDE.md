@@ -2,80 +2,91 @@
 
 ## RULES FOR CLAUDE - READ EVERY TIME
 1. **REVIEW DATA BEFORE CHANGING CODE.** Do not change code based on assumptions. Read the logs the user provides. Analyze them. Then discuss before editing.
-2. **The learning system handles behavior tuning.** Escape angles, backup durations, arc ratios - the robot learns these from experience. Do NOT hand-code escape strategies.
-3. **Only code infrastructure changes.** Map building, sensor integration, learning pipeline plumbing, data flow - these are code changes. Specific robot behaviors are learned.
-4. **The simulator tests infrastructure, not behavior.** Use it to verify map building works, code doesn't crash, UI renders. Do NOT tune escape behavior in the simulator - it doesn't translate to the real robot.
+2. **Cozmo is a mapping platform, not a learning agent.** The system (map + LLM + DB) learns. Cozmo just drives around and collects data.
+3. **Escape behavior is deterministic.** Reverse-arc (backup while turning) at 100mm/s, 135 degrees away from closer side. Data proves this works. Do NOT add rules or learning to escape logic.
+4. **The simulator tests infrastructure, not behavior.** Use it to verify map building works, code doesn't crash, UI renders. Current benchmark: ~56% map coverage in 7200 sim-seconds (2hr sim, 12min wall clock at 10x).
 5. **Do not make changes without discussing them first.** Explain what you want to change and why. Wait for approval.
-6. **This robot is a mapper/surveyor.** Its job is to build the spatial map as best it can. Other more agile robots will use the map later.
+6. **This robot is a mapper/surveyor.** Its job is to build the spatial map. Other robots will use the map later. Platform may change to SMARS.
 7. **Stop going in circles.** If you find yourself reverting or rewriting the same code, stop and talk to the user.
-8. **Don't take shortcuts.** Think through the proper solution instead of defaulting to the quick/easy answer. If the user asks for something, give them what they asked for - don't suggest a dumbed-down version to save effort.
+8. **Don't take shortcuts.** Think through the proper solution instead of defaulting to the quick/easy answer.
 
 ## What This Is
-Autonomous exploration robot: Cozmo + ESP32 sensor pod + trailer. Python on PC controls robot over WiFi, ESP32 sends sensor data via UDP. LLM (Ollama/Gemma3) observes and journals in Phase 1, will direct in Phase 2.
+Mapping platform: Cozmo + ESP32 sensor pod + trailer. Python on PC controls robot over WiFi, ESP32 sends sensor data via UDP. LLM (Ollama/Gemma3) reviews completed maps post-session and produces semantic annotations.
 
-## Current State (2026-02-06)
+## Architecture (2026-02-07)
 
-### Hardware
+### Core Principle
+"The system learns, not Cozmo." Cozmo drives toward unexplored areas, builds the occupancy grid map, escapes when stuck. After a session, the LLM reviews the map and produces semantic annotations (room type, landmarks, doorways, coverage gaps). These annotations persist in SQLite alongside the spatial map.
+
+### Navigation
+- `brain/frontier_navigator.py` - FrontierNavigator: find nearest frontier, drive toward it, update map continuously, escape if stuck. No rules, no random wandering.
+- **Escape**: reverse-arc (backs up while turning simultaneously) in 0.05s step loop. Turns 135 degrees away from closer side. Step loop re-sets wheel speeds each tick so sim collision handler can't freeze the robot.
+- **Escape exclusion**: after escaping, the navigator avoids picking frontiers in the direction of the obstacle. Exclusion cone widens with consecutive escapes (45° base, +15° per repeat, max 120°). Clears after 30 clean driving checks.
+- **Stagnation detection**: tracks map coverage rate across runs. If coverage gain drops below 0.5% per 60s sim-time, triggers relocation mode.
+- **Relocation**: when stagnant, uses `find_best_frontier_cluster()` (information-gain heuristic — clusters frontier cells, scores by size/sqrt(distance)) to pick a big unexplored region to drive to. Resumes normal nearest-frontier scanning when coverage rate recovers.
+
+### State Machine
+- `brain/mapper_state_machine.py` - MapperStateMachine: 4 states (MAPPING, CAPTURING, REVIEWING, DONE)
+  - MAPPING: runs FrontierNavigator in 30s segments. Navigator instance is **persisted** across runs (not recreated) so stagnation/relocation state accumulates.
+  - CAPTURING: takes images at new areas for LLM review
+  - REVIEWING: post-session LLM analysis of ASCII map + stats
+  - DONE: no more frontiers
+
+### LLM Role (post-session only)
+- `brain/session_reviewer.py` - Reviews completed ASCII map + session stats
+- `llm/review_prompts.py` - Prompts for map analysis
+- `memory/map_annotations.py` - SQLite table for semantic annotations (room type, landmarks, doorways, coverage gaps)
+- LLM is NOT involved in real-time navigation. It only runs after mapping is complete.
+
+### Archived (in archive/, not deleted)
+- `learning_coordinator.py` - Rule proposal/validation pipeline
+- `learned_rules.py` - Rule storage/matching/application
+- `pattern_analyzer.py` - Recovery pattern analysis
+- `maneuvers.py` - ZigzagManeuver
+
+## Hardware
 - Cozmo with trailer attached (TRAILER_MODE = True)
 - ESP32 sensor pod: ToF + 3x ultrasonic + MPU6050 IMU, sends JSON over UDP port 5000
 - Nano relay for ESP32 (must be plugged in for sensors to work)
 - Battery drains fast with trailer drag - buck converter on order for external power
 
-### Recent Changes (commit 48dcf8c)
-All 8 fixes from comprehensive data review implemented:
-1. **escape_turn()** in robot.py - uses 100mm/s arcs instead of broken 30mm/s turns
-2. **Emergency turns use escape_turn()** with 120-degree angles (was 90 with slow turn)
-3. **Learning pipeline fixed** - proposed rules now promote to "testing" status
-4. **Yaw wrapping** in stall detection (350->10 = 20, not 340)
-5. **Stall tracking resets** after escapes (last_yaw, last_front_dist)
-6. **Tilt baseline** calibrated lazily from first real sensor reading (not startup zeros)
-7. **_pick_turn_direction** handles -1 (disconnected) sensors via _valid_distance()
-8. **SENSOR_MIN_DISTANCE** removed from config, _valid_distance() simplified
-9. **Audio collision suppression** - _audio_playing flag prevents speaker vibration false positives
-10. **Tilt threshold 25 degrees** - was 15, too sensitive to driving acceleration
-
-### What Works
-- Trailer mode with arc turns (escape success went from 9% to ~100%)
-- 120/135 degree turn angles (data confirms high success)
-- IMU-based stall detection (yaw + distance change)
-- Collision detection via accelerometer (threshold 2500)
-- Learning system proposing rules from data patterns
-- Rules promoting from proposed -> testing (as of fix #3)
-- Tilt baseline calibration from first real ESP32 reading
-
-### Current Focus (2026-02-06)
-- Map infrastructure is implemented (sensor ray-tracing, frontier steering, occupancy grid)
-- Next step: verify learning pipeline works end-to-end with map data, then run on real robot
-- Learning pipeline known issues need checking before real runs:
-  - Rules from previous sessions lose _testing_rules stats on restart (coordinator is in-memory only)
-  - 24 rules stuck in "testing" in DB but not tracked in coordinator memory
-  - LLM keeps proposing similar/duplicate rules each cycle (no dedup)
-
-### Known Issues / Not Yet Verified
-- Head angle for camera may be looking too high (seeing sensor mount instead of scene)
-
-### Key Architecture Facts
+## Key Architecture Facts
 - robot.turn() in trailer mode = slow 30mm/s arcs (for normal navigation)
-- robot.escape_turn() = fast 100mm/s arcs (for escapes - matches working cliff escape)
-- Stall detection: 8 checks warmup (1.2s) + 8 checks threshold (1.2s) = ~2.4s to detect
-- ESP32 resting pitch is ~17.5 degrees (mounting angle) - tilt detection is relative to this baseline
-- Cliff escape uses arc_turn_left/right directly at escape_speed (already worked)
-- Learning pipeline: proposed -> testing -> validated -> active (or rejected)
+- robot.escape_turn() = fast 100mm/s arcs (for escapes)
+- FrontierNavigator escape = reverse-arc (negative wheel speeds) in step loop, not escape_turn()
+- Stall detection: 4 checks warmup + 5 checks threshold (IMU yaw + distance), skipped during escape cooldown (3s)
+- ESP32 resting pitch is ~17.5 degrees (mounting angle) - tilt detection relative to baseline
+- Best escape angles: 120, 135 degrees. 90 degrees never works with trailer.
+- Collision detection via accelerometer (threshold 2500)
+- Tilt threshold 25 degrees with 3 consecutive readings required
+- Stagnation detection: 0.5% min coverage gain per 60s sim-time, uses cumulative elapsed across 30s navigator runs
+- Relocation: cluster-based frontier selection (find_best_frontier_cluster) with size/sqrt(distance) scoring
 
-### Data
-- 50 sessions, ~33 samples, 55% recovery success rate
-- 34 rules total (0 active, ~29 testing, ~5 proposed)
-- Best turn angles: 120, 135 degrees. Worst: 90 (0% with trailer)
+## Sim Results (2026-02-07)
+- **56.5% map known** in 7200s sim (2hr sim, 12min wall clock at 10x)
+- **1.1% visited** (114 cells) — robot physically explores, not just scanning from one spot
+- **18 escapes** — mostly from relocation driving into furniture, handled by escape exclusion
+- 3 stagnation→relocate→resume cycles during the run
+- 0 rules, 0 LLM calls during navigation
+- Compare: old rule-based system got 1.6% in 10 hours with 2,884 escapes
 
-### Files to Know
+## Files to Know
 - `config.py` - all tunable parameters
 - `cozmo_interface/robot.py` - robot control, escape_turn(), collision detection
-- `brain/behaviors.py` - WanderBehavior (main driving loop), escape maneuvers, stall detection
-- `brain/state_machine.py` - state loop, learning cycle, rule promotion
-- `brain/learning_coordinator.py` - LLM-based rule proposal, validation pipeline
-- `memory/learned_rules.py` - LearnedRulesStore (SQLite), rule CRUD, apply_rules_to_action()
+- `brain/frontier_navigator.py` - FrontierNavigator (main navigation loop)
+- `brain/mapper_state_machine.py` - MapperStateMachine (4-state machine)
+- `brain/session_reviewer.py` - post-session LLM map review
+- `memory/spatial_map.py` - occupancy grid, frontier finding, ray-tracing
+- `memory/map_annotations.py` - semantic annotation storage
+- `memory/experience_logger.py` - session data logging
 - `perception/external_sensors.py` - ESP32 UDP/serial reader
+- `llm/client.py` - Ollama client
+- `simulator/sim_robot.py` - physics + ray-cast sensors
+- `simulator/run_full_sim.py` - full simulation test harness
 
-### Test Commands
-- Full run: `python main.py`
+## Test Commands
+- Full run (real robot): `python main.py`
+- Sim test (headless): `python -m simulator.run_full_sim --world furnished_room --duration 3600 --time-scale 10`
+- Sim test (rendered): `python -m simulator.run_full_sim --world furnished_room --duration 600 --time-scale 5 --render`
+- Interactive sim: `python -m simulator.run_sim`
 - Quick connection test: `python -m cozmo_interface.robot`

@@ -6,8 +6,9 @@
 |-----------|----------|-------|
 | Cozmo Robot | 1 | Must be charged, off the charger to explore |
 | Computer | 1 | Windows/Linux/Mac with WiFi and USB |
-| ESP32 Sensor Pod | 1 | Optional but recommended for proactive obstacle detection |
-| USB Cable | 1 | For ESP32 connection |
+| ESP32 Sensor Pod | 1 | ToF + 3x ultrasonic + MPU6050 IMU |
+| Arduino Nano | 1 | Relay for ESP32 power (must be plugged in) |
+| Trailer | 1 | Carries sensor pod, attached to Cozmo |
 
 ## Network Topology
 
@@ -16,18 +17,18 @@
 │                         YOUR COMPUTER                            │
 │                                                                  │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐   │
-│  │   Python     │  │   Ollama     │  │   ESP32 Serial       │   │
-│  │   main.py    │  │   (LLM)      │  │   (COM3 / ttyUSB0)   │   │
+│  │   Python     │  │   Ollama     │  │   ESP32 UDP          │   │
+│  │   main.py    │  │   (LLM)     │  │   (port 5000)         │   │
 │  └──────┬───────┘  └──────────────┘  └──────────┬───────────┘   │
 │         │                                        │               │
-│         │ WiFi (Cozmo's network)                 │ USB Cable     │
+│         │ WiFi (Cozmo's network)                 │ WiFi (UDP)    │
 │         │                                        │               │
 └─────────┼────────────────────────────────────────┼───────────────┘
           │                                        │
           ▼                                        ▼
     ┌───────────┐                          ┌─────────────┐
     │   COZMO   │◄─────── sits on ────────►│ ESP32 POD   │
-    │   ROBOT   │                          │ (sensors)   │
+    │  + trailer │                          │ (sensors)   │
     └───────────┘                          └─────────────┘
 ```
 
@@ -48,7 +49,7 @@
    pip install -r requirements.txt
    ```
 
-3. **Ollama** (for LLM) - Optional but recommended
+3. **Ollama** (for post-session LLM review) - Optional
    - Download from: https://ollama.ai
    - Install and run:
      ```bash
@@ -59,7 +60,7 @@
      ollama pull gemma3:latest
      ```
 
-4. **Serial Driver** (for ESP32)
+4. **Serial Driver** (for ESP32 if using USB serial mode)
    - Windows: Usually auto-installs, or get CP210x/CH340 driver
    - Linux: Usually works out of box, may need `sudo usermod -a -G dialout $USER`
 
@@ -77,46 +78,35 @@
 2. Connect to `Cozmo_XXXXXX` network
 3. **Note:** You will lose internet access while connected
 
-### Step 3: Connect ESP32 Sensor Pod (Optional)
+### Step 3: Connect ESP32 Sensor Pod
 
-1. Plug ESP32 into USB port
-2. Find the serial port:
-   - **Windows:** Open Device Manager → Ports → Note `COM3` or similar
-   - **Linux:** `ls /dev/ttyUSB*` → Note `/dev/ttyUSB0` or similar
-   - **Mac:** `ls /dev/tty.usb*`
+The ESP32 pod communicates via WiFi UDP by default (port 5000).
 
-3. Set environment variable if not default:
-   ```bash
-   # Windows
-   set EXT_SENSOR_PORT=COM3
+1. Plug in the Arduino Nano relay (powers the ESP32)
+2. The ESP32 should auto-connect to your network and start broadcasting UDP
 
-   # Linux/Mac
-   export EXT_SENSOR_PORT=/dev/ttyUSB0
-   ```
+To override connection settings:
+```bash
+# UDP mode (default)
+set EXT_SENSOR_MODE=udp
+set EXT_SENSOR_UDP_PORT=5000
+
+# Serial mode (if using USB cable)
+set EXT_SENSOR_MODE=serial
+set EXT_SENSOR_PORT=COM3
+```
 
 ### Step 4: Start Ollama (Optional)
 
-In a **separate terminal** (if you have internet on another adapter, or do this before connecting to Cozmo):
+In a **separate terminal** (before connecting to Cozmo's WiFi):
 
 ```bash
 ollama serve
 ```
 
-Leave this running. If you can't run Ollama, the system will fall back to statistical-only learning.
+If you can't run Ollama, the system skips the post-session review but mapping works fine.
 
-### Step 5: Configure Mode (Optional)
-
-Edit `config.py` to enable optional features:
-
-```python
-# Trailer Mode - for when Cozmo has a trailer attached
-TRAILER_MODE = False  # Set True to use arc turns instead of in-place turns
-
-# Manual Control - for testing and training data collection
-MANUAL_CONTROL_ENABLED = False  # Set True to launch manual control GUI
-```
-
-### Step 6: Run Cozmo Explorer
+### Step 5: Run Cozmo Explorer
 
 ```bash
 cd cozmo-explorer
@@ -127,144 +117,111 @@ python main.py
 
 ```
 08:30:15 | INFO     | __main__            | ============================================================
-08:30:15 | INFO     | __main__            |   COZMO EXPLORER
+08:30:15 | INFO     | __main__            |   COZMO EXPLORER - Mapping Platform
 08:30:15 | INFO     | __main__            | ============================================================
 08:30:15 | INFO     | __main__            | Connecting to state store...
-08:30:15 | INFO     | memory.experience_logger | ExperienceLogger connected: data\state.db
-08:30:15 | INFO     | memory.learned_rules | LearnedRulesStore connected: data\state.db
-08:30:15 | INFO     | __main__            | Learning coordinator initialized
-08:30:15 | INFO     | __main__            | Connecting to experience database...
-08:30:16 | INFO     | __main__            | Loaded 0 previous experiences
+08:30:15 | INFO     | __main__            | Initializing experience logger...
 08:30:16 | INFO     | __main__            | Checking LLM availability...
-08:30:16 | INFO     | llm.client          | LLM client ready: http://localhost:11434 using gemma3:latest
-08:30:16 | INFO     | __main__            | LLM ready: gemma3:latest
+08:30:16 | INFO     | __main__            | LLM ready: gemma3:latest (post-session review)
 08:30:16 | INFO     | __main__            | Connecting to Cozmo...
-08:30:16 | INFO     | __main__            | (Make sure PC is connected to Cozmo's WiFi)
 08:30:18 | INFO     | cozmo_interface.robot | Connected to Cozmo!
 08:30:18 | INFO     | __main__            | Robot connected!
-08:30:18 | INFO     | __main__            | Connecting external sensors on COM3...
+08:30:18 | INFO     | __main__            | Connecting external sensors via WiFi UDP (port 5000)...
 08:30:20 | INFO     | __main__            | External sensors connected!
 08:30:20 | INFO     | __main__            | Initialization complete!
+08:30:20 | INFO     | __main__            | Mode: autonomous, with trailer
+08:30:20 | INFO     | __main__            | Started mapping session 1
 ```
 
-### Step 7: Let It Explore (Autonomous Mode)
+### Step 6: Let It Map
 
 - Place Cozmo on the floor in a room with obstacles
-- Let it wander and bump into things
-- Watch the logs for:
-  - `Collision detected` / `Stall detected`
-  - `escape_stall` / `escape_cliff` actions
-  - `Captured before/after image`
+- The robot will automatically:
+  - Drive toward unexplored areas (frontiers)
+  - Build the occupancy grid map from sensor data
+  - Escape obstacles with reverse-arc maneuvers
+  - Relocate if coverage rate stalls
+
+### Periodic Status (every 30 seconds)
+
+```
+08:31:00 | INFO     | __main__            | ----------------------------------------
+08:31:00 | INFO     | __main__            | Mapper | Control: AUTO TRAILER
+08:31:00 | INFO     | __main__            | State: MAPPING
+08:31:00 | INFO     | __main__            | Position: (150, 230)
+08:31:00 | INFO     | __main__            | Battery: 3.72V
+08:31:00 | INFO     | __main__            | Map: 2.3% visited, 15.7% known
+08:31:00 | INFO     | __main__            | Escapes: 3 | Targets: 12
+08:31:00 | INFO     | __main__            | Sensors: F=450mm L=200mm R=380mm
+08:31:00 | INFO     | __main__            | ----------------------------------------
+```
+
+### Step 7: Stop Gracefully
+
+Press `Ctrl+C` to stop. The system will:
+1. Save the spatial map
+2. Save session stats
+3. Run post-session LLM review (if available)
+4. Disconnect from robot and sensors
 
 ### Manual Control Mode (Optional)
 
-If you set `MANUAL_CONTROL_ENABLED = True`, a GUI window will open:
+Set `MANUAL_CONTROL_ENABLED = True` in `config.py` to launch a GUI:
 
 **Keyboard Controls:**
 | Key | Action |
 |-----|--------|
 | Arrow Up/Down | Forward/Backward |
-| Arrow Left/Right | Turn (arc turn if trailer mode) |
+| Arrow Left/Right | Turn (arc turn with trailer) |
 | A/D | Gentle arc turns |
-| Q/E | Reverse arc turns (for backing with trailer) |
-| Page Up/Down | Head up/down |
-| R/F | Lift up/down |
 | Space | Stop |
 | M | Toggle Manual/Auto mode |
-| L | Toggle logging on/off |
 | Escape | Exit |
 
-**Key Feature:** Manual control uses the same robot interface as autonomous mode, so:
-- Manual driving generates training data for the learning system
-- You can test recovery maneuvers manually
-- Switch between manual and auto with the M key
+## Running the Simulator
 
-### Step 8: Stop Gracefully
-
-Press `Ctrl+C` to stop. You'll see:
-
-```
-08:45:30 | INFO     | __main__            | Interrupt received, stopping...
-08:45:31 | INFO     | __main__            | Shutting down...
-08:45:31 | INFO     | __main__            | Learning system: 5 rules, 23 samples
-08:45:31 | INFO     | __main__            |   Rules by status: {'proposed': 2, 'active': 1}
-08:45:32 | INFO     | __main__            | Shutdown complete
-```
-
-## Verifying Data Collection
-
-After running for a while, check that data is being collected:
-
-### Check Database Tables
+No hardware needed - tests the mapping system in a virtual room.
 
 ```bash
-# Windows (install sqlite3 or use Python)
-python -c "import sqlite3; c=sqlite3.connect('data/state.db'); print('Snapshots:', c.execute('SELECT COUNT(*) FROM sensor_snapshots').fetchone()[0]); print('Actions:', c.execute('SELECT COUNT(*) FROM action_events').fetchone()[0])"
+# Fast headless run (3600 sim-seconds = ~6 min at 10x)
+python -m simulator.run_full_sim --world furnished_room --duration 3600 --time-scale 10
+
+# Visual run with pygame rendering
+python -m simulator.run_full_sim --world furnished_room --duration 600 --time-scale 5 --render
+
+# Interactive sim (keyboard control)
+python -m simulator.run_sim
 ```
 
-### Check Images
+### Sim Output
 
-```bash
-# Windows
-dir data\learning_images
-
-# Linux/Mac
-ls -la data/learning_images/
-```
-
-### Check Logs
-
-```bash
-# View the log file
-# Windows
-type data\cozmo.log
-
-# Linux/Mac
-cat data/cozmo.log
-```
+The simulator produces a report in `data/sim_report_*.txt` with:
+- Map coverage percentages
+- Escape count
+- ASCII visualization of the map
+- Cell state breakdown
 
 ## Troubleshooting
 
 ### "Failed to connect to Cozmo"
-
 - Make sure your computer is connected to Cozmo's WiFi
 - Make sure Cozmo is awake (not sleeping)
 - Try restarting Cozmo
 
 ### "External sensors not available"
-
-- Check USB connection
-- Check serial port name (COM3 vs COM4, etc.)
-- Check if another program is using the port
+- Check that Arduino Nano relay is plugged in
+- Check if ESP32 is broadcasting on the expected port
+- Try serial mode: `set EXT_SENSOR_MODE=serial` and `set EXT_SENSOR_PORT=COM3`
 
 ### "LLM not available"
-
 - Make sure Ollama is running (`ollama serve`)
 - Make sure you pulled the model (`ollama pull gemma3:latest`)
-- System will still work without LLM (statistical fallback)
+- System works fine without LLM - it just skips the post-session review
 
-### No collisions/stalls being detected
-
-- Make sure external sensors are connected (better detection)
-- Push Cozmo gently into obstacles to trigger collision detection
-- Check logs for accelerometer readings
-
-## Running Multiple Sessions
-
-Each time you run `main.py`:
-1. A new session is created
-2. Data accumulates in the same database
-3. Learned rules persist across sessions
-4. The learning system picks up where it left off
-
-## Recommended Test Sequence
-
-| Session | Duration | Goal |
-|---------|----------|------|
-| 1 | 5-10 min | Verify data collection works |
-| 2 | 10-15 min | Accumulate ~20+ recovery events |
-| 3 | 15-20 min | Learning cycle should run, rules proposed |
-| 4+ | 15-20 min | Rules get tested and validated |
+### Low battery warnings
+- Battery drains faster with trailer attached
+- Buck converter for external power is planned
+- Charge between sessions
 
 ## Data Locations
 
@@ -272,61 +229,6 @@ Each time you run `main.py`:
 |------|----------|
 | SQLite Database | `data/state.db` |
 | Spatial Map | `data/spatial_map.npz` |
-| Learning Images | `data/learning_images/` |
+| Mapping Images | `data/mapping_images/` |
 | Log File | `data/cozmo.log` |
-| ChromaDB (experiences) | `data/chroma/` |
-
-## Quick Health Check Script
-
-Save this as `check_status.py` and run it:
-
-```python
-import sqlite3
-from pathlib import Path
-
-db_path = Path("data/state.db")
-if not db_path.exists():
-    print("No database found. Run main.py first.")
-    exit()
-
-conn = sqlite3.connect(str(db_path))
-
-print("=== LEARNING SYSTEM STATUS ===\n")
-
-# Sensor snapshots
-count = conn.execute("SELECT COUNT(*) FROM sensor_snapshots").fetchone()[0]
-print(f"Sensor snapshots: {count}")
-
-# Action events
-count = conn.execute("SELECT COUNT(*) FROM action_events").fetchone()[0]
-print(f"Action events: {count}")
-
-# Actions by type
-print("\nActions by type:")
-for row in conn.execute("SELECT action_type, COUNT(*) FROM action_events GROUP BY action_type"):
-    print(f"  {row[0]}: {row[1]}")
-
-# Outcomes by type
-print("\nOutcomes by type:")
-for row in conn.execute("SELECT outcome_type, COUNT(*) FROM outcome_events GROUP BY outcome_type"):
-    print(f"  {row[0]}: {row[1]}")
-
-# Rules
-print("\nLearned rules:")
-for row in conn.execute("SELECT name, status, times_applied, times_successful FROM learned_rules"):
-    rate = f"{row[3]/row[2]:.0%}" if row[2] > 0 else "n/a"
-    print(f"  {row[0]}: {row[1]} (applied: {row[2]}, success: {rate})")
-
-# Images
-images_dir = Path("data/learning_images")
-if images_dir.exists():
-    image_count = len(list(images_dir.glob("*.jpg")))
-    print(f"\nLearning images captured: {image_count}")
-
-conn.close()
-```
-
-Run with:
-```bash
-python check_status.py
-```
+| Sim Reports | `data/sim_report_*.txt` |

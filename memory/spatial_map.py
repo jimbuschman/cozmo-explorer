@@ -296,6 +296,122 @@ class SpatialMap:
 
         return None
 
+    def find_best_frontier_cluster(
+        self,
+        x: float,
+        y: float,
+        min_cluster_size: int = 3,
+        exclude_angle: float = None,
+        exclude_cone: float = math.radians(45),
+    ) -> Optional[Tuple[float, float]]:
+        """
+        Find the best frontier cluster to explore using information-gain heuristic.
+
+        Instead of picking the nearest individual frontier cell, this:
+        1. Finds all frontier cells (UNKNOWN adjacent to FREE/VISITED)
+        2. Clusters them by connectivity (flood-fill)
+        3. Scores each cluster: size / sqrt(distance) — big nearby clusters win
+        4. Returns the nearest reachable point of the highest-scoring cluster
+
+        This forces the robot to physically navigate to substantial unexplored
+        regions instead of scanning tiny frontier fragments from a distance.
+
+        Args:
+            x, y: Current robot position in mm
+            min_cluster_size: Ignore clusters smaller than this (noise)
+            exclude_angle: If set, skip clusters whose nearest point falls
+                           within exclude_cone of this angle (radians)
+            exclude_cone: Half-width of exclusion cone in radians
+
+        Returns:
+            (x, y) of the nearest reachable point of the best cluster, or None
+        """
+        # Step 1: Find all frontier cells
+        frontier_set = set()
+        for gy in range(self.height):
+            for gx in range(self.width):
+                if self.grid[gy, gx] != CellState.UNKNOWN:
+                    continue
+                for nx, ny in [(gx - 1, gy), (gx + 1, gy), (gx, gy - 1), (gx, gy + 1)]:
+                    if 0 <= nx < self.width and 0 <= ny < self.height:
+                        if self.grid[ny, nx] in (CellState.FREE, CellState.VISITED):
+                            frontier_set.add((gx, gy))
+                            break
+
+        if not frontier_set:
+            return None
+
+        # Step 2: Cluster by connectivity (DFS flood-fill)
+        clusters = []
+        visited = set()
+        for cell in frontier_set:
+            if cell in visited:
+                continue
+            stack = [cell]
+            visited.add(cell)
+            cluster = []
+            while stack:
+                cx, cy = stack.pop()
+                cluster.append((cx, cy))
+                for nx, ny in [(cx - 1, cy), (cx + 1, cy), (cx, cy - 1), (cx, cy + 1)]:
+                    if (nx, ny) in frontier_set and (nx, ny) not in visited:
+                        visited.add((nx, ny))
+                        stack.append((nx, ny))
+            clusters.append(cluster)
+
+        # Step 3: Score each cluster — size / sqrt(distance + 1)
+        robot_gx, robot_gy = self.world_to_grid(x, y)
+        scored = []
+
+        for cluster in clusters:
+            if len(cluster) < min_cluster_size:
+                continue
+
+            # Find nearest cell in cluster to robot
+            min_dist_sq = float('inf')
+            nearest_cell = cluster[0]
+            for cx, cy in cluster:
+                d_sq = (cx - robot_gx) ** 2 + (cy - robot_gy) ** 2
+                if d_sq < min_dist_sq:
+                    min_dist_sq = d_sq
+                    nearest_cell = (cx, cy)
+
+            min_dist = math.sqrt(min_dist_sq)
+
+            # Exclude clusters in the escape exclusion cone
+            if exclude_angle is not None:
+                wx, wy = self.grid_to_world(nearest_cell[0], nearest_cell[1])
+                angle_to = math.atan2(wy - y, wx - x)
+                diff = (angle_to - exclude_angle + math.pi) % (2 * math.pi) - math.pi
+                if abs(diff) < exclude_cone:
+                    continue
+
+            score = len(cluster) / math.sqrt(min_dist + 1)
+            scored.append((score, nearest_cell, len(cluster)))
+
+        if scored:
+            scored.sort(key=lambda s: s[0], reverse=True)
+            best_score, best_cell, best_size = scored[0]
+            logger.debug(
+                f"Frontier cluster: size={best_size} dist={math.sqrt((best_cell[0]-robot_gx)**2 + (best_cell[1]-robot_gy)**2):.0f} "
+                f"score={best_score:.1f} (of {len(scored)} clusters)"
+            )
+            return self.grid_to_world(best_cell[0], best_cell[1])
+
+        # All clusters filtered or too small — fall back to largest cluster
+        if clusters:
+            largest = max(clusters, key=len)
+            min_dist_sq = float('inf')
+            nearest = largest[0]
+            for cx, cy in largest:
+                d_sq = (cx - robot_gx) ** 2 + (cy - robot_gy) ** 2
+                if d_sq < min_dist_sq:
+                    min_dist_sq = d_sq
+                    nearest = (cx, cy)
+            return self.grid_to_world(nearest[0], nearest[1])
+
+        return None
+
     def find_nearest_unknown(
         self,
         x: float,

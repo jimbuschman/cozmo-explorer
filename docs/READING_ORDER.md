@@ -8,72 +8,58 @@ When starting a new Claude Code session on this project, read these files in ord
 
 ## Priority 1: Essential Context (Read These First)
 
-### 1. `PLAN.md` (root folder)
-**What**: Original project overview and architecture
-**Why**: Understand what this project is - an autonomous Cozmo robot using LLM for exploration
-**Key points**: Architecture diagram, tech stack, project structure, implementation phases
-
-### 2. `docs/revised system desciprtion.txt`
-**What**: Core philosophy and design principles
-**Why**: Understand the "why" - data-first learning, LLM as observer not pilot
+### 1. `CLAUDE.md` (root folder)
+**What**: Rules for Claude, current architecture summary, key files, test commands
+**Why**: This is the primary context document. Contains everything needed for day-to-day work.
 **Key points**:
-- Learning System = the brain (required, works without LLM)
-- LLM = curiosity/personality (optional, adds purpose)
-- Phased approach to intelligence
+- "The system learns, not Cozmo" - mapping platform architecture
+- FrontierNavigator + MapperStateMachine are the active code
+- Escape behavior is deterministic (no rules)
+- LLM only runs post-session for map review
+- Current sim benchmark: 56.5% coverage in 7200s
 
-### 3. `docs/ARCHITECTURE_PHASES.md`
-**What**: Detailed phased implementation plan
-**Why**: Understand current phase (Phase 1) and what's coming
-**Key points**:
-- Phase 1: Grounded Survival Learning (CURRENT)
-- Phase 2: Place & Context Learning (NEXT)
-- Phase 3: Multi-Agent Exploration (FUTURE)
+### 2. `PLAN.md` (root folder)
+**What**: Project overview, architecture diagram, file structure, how it works
+**Why**: Understand what this project is and how all the pieces fit together
+**Key points**: Architecture diagram, complete file tree, hardware list, current performance numbers
+
+### 3. `config.py`
+**What**: All tunable parameters
+**Why**: See current settings for speeds, thresholds, sensor geometry, modes
+**Key settings**: `TRAILER_MODE = True`, `ESCAPE_ANGLE = 135`, `WANDER_SPEED = 70`
 
 ---
 
-## Priority 2: Current Implementation Details
+## Priority 2: Detailed Architecture
 
-### 4. `config.py`
-**What**: Configuration with phase settings
-**Why**: See what mode the system is in (Phase 1 survival vs Phase 2+ directed)
-**Key settings**:
-- `PHASE1_PURE_SURVIVAL = True` → Robot explores autonomously
-- `ENABLE_LLM = True/False` → LLM enabled/disabled
-- External sensor port settings
-
-### 5. `docs/LEARNING_SYSTEM.md`
-**What**: Detailed learning system architecture
-**Why**: Understand how the robot learns from experience
-**Key points**: Data collection → Pattern analysis → Rule proposal → Validation → Activation
-
-### 6. `docs/HARDWARE_SETUP.md`
-**What**: Hardware architecture and communication
-**Why**: Understand the physical setup (robots, sensors, Pi, main PC)
-**Key points**: Data flow from sensors → Pi → Main system
+### 4. `docs/ARCHITECTURE.md`
+**What**: Detailed system architecture with diagrams and data flow
+**Why**: Deep understanding of FrontierNavigator, escape mechanics, stagnation detection, spatial map, post-session LLM review
+**Key sections**: FrontierNavigator loop, escape exclusion, stagnation/relocation, spatial map cell states, configuration reference
 
 ---
 
 ## Priority 3: Reference (Read When Needed)
 
+### `docs/HARDWARE_SETUP.md`
+**What**: Hardware architecture and communication topology
+**Why**: Understanding the physical setup (Cozmo, ESP32, trailer, networking)
+**When**: Working on sensor integration or hardware changes
+
 ### `docs/ESP32_INTEGRATION.md`
-**What**: ESP32 sensor pod integration details
-**Why**: Specific implementation of external sensors
-**When**: Working on sensor code or hardware
+**What**: ESP32 sensor pod software integration (data format, Python reader, how navigator uses sensors)
+**Why**: Understanding how sensor data flows into the mapping system
+**When**: Working on sensor code or debugging sensor issues
 
-### `docs/PHASE1_CODE_CHANGES.md`
-**What**: Code changes made for Phase 1 pure survival mode
-**Why**: Understanding Phase 1 specific implementation
-**When**: Debugging or modifying Phase 1 behavior
-
-### `docs/PHASE2_COMPONENTS.md`
-**What**: Sketches for Phase 2 components (place recognition, room clustering)
-**Why**: Planning for Phase 2 implementation
-**When**: Ready to start Phase 2
+### `docs/nano_esp32_sensor_integration.md`
+**What**: Hardware wiring, pin assignments, Arduino/ESP32 firmware code
+**Why**: Complete firmware reference with wiring diagrams and C++ code
+**When**: Working on the physical sensor pod, reflashing firmware, or changing wiring
 
 ### `docs/SETUP_GUIDE.md`
-**What**: How to set up and run the system
-**Why**: Getting the system running
-**When**: First-time setup or troubleshooting
+**What**: How to set up and run the system (real robot + simulator)
+**Why**: Getting the system running, troubleshooting
+**When**: First-time setup, adding new hardware, or something isn't working
 
 ---
 
@@ -82,44 +68,59 @@ When starting a new Claude Code session on this project, read these files in ord
 If you're a new Claude session and need to understand this project fast:
 
 ```
-1. Read PLAN.md (5 min) - What is this project?
-2. Read revised system desciprtion.txt (3 min) - What's the philosophy?
-3. Read ARCHITECTURE_PHASES.md sections on Phase 1 (5 min) - What are we doing now?
-4. Skim config.py (2 min) - What mode is it in?
+1. Read CLAUDE.md (3 min) - Rules, architecture, key files, commands
+2. Skim PLAN.md (3 min) - Architecture diagram, file structure
+3. Skim config.py (1 min) - Current settings
 ```
 
-Total: ~15 minutes to understand the project well enough to help.
+Total: ~7 minutes to understand the project well enough to help.
+
+For deeper work, also read `docs/ARCHITECTURE.md` for the detailed technical design.
 
 ---
 
 ## Key Concepts Summary
 
-### The Two Layers
+### The Architecture
 ```
-LLM ("The Explorer") - Optional, adds curiosity/personality
-        ↓
-Learning System ("The Brain") - Required, learns from experience
-        ↓
-Robot Fleet - Cozmo robots with sensors
+MapperStateMachine (4 states: MAPPING, CAPTURING, REVIEWING, DONE)
+        │
+        └─ FrontierNavigator (persistent instance)
+              │
+              ├─ Drives toward nearest frontier
+              ├─ Updates occupancy grid via sensor ray-tracing
+              ├─ Escapes obstacles (deterministic reverse-arc)
+              ├─ Detects stagnation (coverage rate)
+              └─ Relocates to big unexplored clusters when stagnant
 ```
 
-### Current State (Phase 1)
-- Robot wanders, collides, recovers, logs everything
-- Learning system proposes and validates micro-rules
-- LLM observes and journals (doesn't direct)
-- System works fully without LLM
+### LLM Role
+```
+During mapping: LLM is NOT involved (zero calls)
+After mapping:  LLM reviews ASCII map + stats → semantic annotations
+```
 
-### Data Flow
-```
-Cozmo + ESP32 sensors → WiFi → Raspberry Pi (buffer) → Ethernet → Main PC (brain)
-```
+### Key Numbers
+- 56.5% map coverage in 7200s sim-time (12 min wall clock at 10x)
+- 18 escapes per session (reverse-arc at 135 degrees)
+- 3 stagnation relocations per session
+- 0 rules, 0 LLM calls during navigation
 
 ---
 
 ## Archive
 
-Older or superseded documents are in `docs/archive/`:
-- `HARDWARE_COMMUNICATION.md` - Generic multi-robot options (superseded by HARDWARE_SETUP.md)
+Older documents about the previous rule-learning architecture are in `docs/archive/`:
+- `ARCHITECTURE_PHASES.md` - Old 3-phase learning approach
+- `LEARNING_SYSTEM.md` - Old PatternAnalyzer/LearningCoordinator pipeline
+- `PHASE1_CODE_CHANGES.md` - Old Phase 1 modifications
+- `PHASE2_COMPONENTS.md` - Sketches for place recognition (never built)
+- `revised system desciprtion.txt` - Old "rules from patterns" philosophy
+- `PLAN_original.md` - Original project overview
+- `HARDWARE_COMMUNICATION.md` - Old multi-robot communication options
+
+The archived code is in `archive/`:
+- `learning_coordinator.py`, `learned_rules.py`, `pattern_analyzer.py`, `maneuvers.py`
 
 ---
 
@@ -127,13 +128,11 @@ Older or superseded documents are in `docs/archive/`:
 
 | File | Location | Purpose |
 |------|----------|---------|
-| Project overview | `PLAN.md` | What is this? |
-| Philosophy | `docs/revised system desciprtion.txt` | Why this approach? |
-| Phases | `docs/ARCHITECTURE_PHASES.md` | Phase 1/2/3 details |
+| Claude context | `CLAUDE.md` | Rules + architecture for Claude sessions |
+| Project overview | `PLAN.md` | Architecture, structure, how to run |
 | Config | `config.py` | Current settings |
-| Learning details | `docs/LEARNING_SYSTEM.md` | How learning works |
+| Architecture | `docs/ARCHITECTURE.md` | Detailed system design |
 | Hardware | `docs/HARDWARE_SETUP.md` | Physical architecture |
-| ESP32 | `docs/ESP32_INTEGRATION.md` | Sensor pod details |
-| Phase 1 code | `docs/PHASE1_CODE_CHANGES.md` | Phase 1 modifications |
-| Phase 2 design | `docs/PHASE2_COMPONENTS.md` | Future components |
+| ESP32 (software) | `docs/ESP32_INTEGRATION.md` | Sensor pod software integration |
+| ESP32 (hardware) | `docs/nano_esp32_sensor_integration.md` | Wiring, firmware, pin assignments |
 | Setup | `docs/SETUP_GUIDE.md` | How to run |

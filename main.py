@@ -1,7 +1,8 @@
 """
 Cozmo Explorer - Main Entry Point
 
-An autonomous exploration system for the Cozmo robot.
+Mapping platform: Cozmo drives around building a spatial map.
+Post-session, the LLM reviews the map and produces semantic annotations.
 """
 import asyncio
 import logging
@@ -15,39 +16,29 @@ from typing import Optional
 import config
 from perception.external_sensors import ExternalSensorReader
 from cozmo_interface.robot import CozmoRobot
-from brain.state_machine import StateMachine, RobotState, Goal
-from llm.client import LLMClient
-from memory.experience_db import ExperienceDB
+from brain.mapper_state_machine import MapperStateMachine, MapperState
+from brain.session_reviewer import SessionReviewer
 from memory.spatial_map import SpatialMap
 from memory.state_store import StateStore
-from perception.vision_observer import VisionObserver
-from brain.personality import CozmoPersonality, get_random_line
-
-# Learning system components
+from memory.map_annotations import MapAnnotationStore
 from memory.experience_logger import ExperienceLogger
-from memory.pattern_analyzer import PatternAnalyzer
-from memory.learned_rules import LearnedRulesStore
-from brain.learning_coordinator import LearningCoordinator
 from control.manual_controller import ManualController
 
 # Configure logging - both screen and file
 log_format = '%(asctime)s | %(levelname)-8s | %(name)-20s | %(message)s'
 log_datefmt = '%H:%M:%S'
 
-# Set up root logger
 logging.basicConfig(
-    level=logging.DEBUG,  # Capture DEBUG for file
+    level=logging.DEBUG,
     format=log_format,
     datefmt=log_datefmt,
     handlers=[
-        # Console handler (INFO and above)
         logging.StreamHandler(),
-        # File handler (DEBUG and above)
         logging.FileHandler(config.DATA_DIR / 'cozmo.log', mode='w', encoding='utf-8')
     ]
 )
 
-# Set console to INFO only (less noisy)
+# Set console to INFO only
 logging.getLogger().handlers[0].setLevel(logging.INFO)
 
 logger = logging.getLogger(__name__)
@@ -55,105 +46,78 @@ logger = logging.getLogger(__name__)
 
 class CozmoExplorer:
     """
-    Main application class that coordinates all components.
+    Main application class - mapping platform architecture.
+
+    Cozmo's job: drive around, collect sensor data, build the spatial map.
+    System's job: LLM reviews completed maps, produces semantic annotations.
     """
 
     def __init__(self):
         self.robot = CozmoRobot()
-        self.llm = LLMClient()
-        self.experiences = ExperienceDB()
         self.spatial_map = SpatialMap()
         self.state_store = StateStore()
-        self.state_machine: StateMachine = None
-        self.vision_observer: VisionObserver = None
-        self.personality = CozmoPersonality()  # Alien explorer mode!
+        self.mapper: Optional[MapperStateMachine] = None
         self.external_sensors: Optional[ExternalSensorReader] = None
 
-        # Learning system components
+        # LLM for post-session review
+        self.llm = None
+        self.session_reviewer: Optional[SessionReviewer] = None
+        self.annotation_store: Optional[MapAnnotationStore] = None
         self.experience_logger: Optional[ExperienceLogger] = None
-        self.rules_store: Optional[LearnedRulesStore] = None
-        self.pattern_analyzer: Optional[PatternAnalyzer] = None
-        self.learning_coordinator: Optional[LearningCoordinator] = None
 
         # Manual control
         self.manual_controller: Optional[ManualController] = None
-        self._manual_mode = False  # True when in manual mode
+        self._manual_mode = False
 
         self._running = False
-        self._start_time: datetime = None
+        self._start_time: Optional[datetime] = None
 
     async def initialize(self) -> bool:
-        """Initialize all components"""
+        """Initialize all components."""
         logger.info("=" * 60)
-        logger.info("  COZMO EXPLORER")
-        if config.PHASE1_PURE_SURVIVAL:
-            logger.info("  Phase 1: Grounded Survival Learning")
-        else:
-            logger.info("  Phase 2+: LLM-Directed Exploration")
+        logger.info("  COZMO EXPLORER - Mapping Platform")
         logger.info("=" * 60)
 
         # Connect to state store
         logger.info("Connecting to state store...")
         self.state_store.connect()
 
-        # Initialize learning system components
-        logger.info("Initializing learning system...")
+        # Initialize experience logger
+        logger.info("Initializing experience logger...")
         self.experience_logger = ExperienceLogger()
         self.experience_logger.connect()
 
-        self.rules_store = LearnedRulesStore()
-        self.rules_store.connect()
-
-        self.pattern_analyzer = PatternAnalyzer(self.experience_logger)
-
-        # Learning coordinator will be created after LLM is ready
+        # Initialize annotation store
+        self.annotation_store = MapAnnotationStore()
+        self.annotation_store.connect()
 
         # Load previous map if exists
         map_file = config.DATA_DIR / "spatial_map.npz"
         if map_file.exists():
             try:
                 self.spatial_map = SpatialMap.load(str(map_file))
-                logger.info("Loaded previous spatial map")
+                logger.info(f"Loaded previous spatial map: {self.spatial_map.get_visited_percentage()*100:.1f}% visited")
             except Exception as e:
                 logger.warning(f"Could not load map: {e}")
 
-        # Connect to experience database
-        logger.info("Connecting to experience database...")
-        await self.experiences.connect()
-        exp_count = await self.experiences.count()
-        logger.info(f"Loaded {exp_count} previous experiences")
-
-        # Check LLM availability (optional in Phase 1)
+        # Check LLM availability (for post-session review)
         if config.ENABLE_LLM:
             logger.info("Checking LLM availability...")
             try:
+                from llm.client import LLMClient
+                self.llm = LLMClient()
                 await self.llm.connect()
                 if await self.llm.health_check():
-                    logger.info(f"LLM ready: {self.llm.model}")
-                    # Set up alien explorer personality
-                    self.llm.set_personality(self.personality)
-                    if config.PHASE1_PURE_SURVIVAL:
-                        logger.info("Phase 1 mode: LLM will observe and journal only")
-                    else:
-                        logger.info("Phase 2+ mode: LLM will provide guidance")
+                    logger.info(f"LLM ready: {self.llm.model} (post-session review)")
+                    self.session_reviewer = SessionReviewer(self.llm)
                 else:
-                    logger.warning("LLM not available - running in autonomous-only mode")
+                    logger.warning("LLM not available - will skip post-session review")
                     self.llm = None
             except Exception as e:
-                logger.warning(f"LLM initialization failed: {e} - running without LLM")
+                logger.warning(f"LLM init failed: {e} - will skip post-session review")
                 self.llm = None
         else:
-            logger.info("LLM disabled by config - running in pure autonomous mode")
-            self.llm = None
-
-        # Create learning coordinator (works with or without LLM)
-        self.learning_coordinator = LearningCoordinator(
-            llm_client=self.llm,
-            experience_logger=self.experience_logger,
-            pattern_analyzer=self.pattern_analyzer,
-            rules_store=self.rules_store
-        )
-        logger.info("Learning coordinator initialized")
+            logger.info("LLM disabled - no post-session review")
 
         # Connect to robot
         logger.info("Connecting to Cozmo...")
@@ -191,20 +155,16 @@ class CozmoExplorer:
 
             def on_ext_reading(reading):
                 s = self.robot._sensors
-                # Distance sensors
                 s.ext_tof_mm = reading.tof_mm
                 s.ext_ultra_l_mm = reading.ultra_l_mm
                 s.ext_ultra_c_mm = reading.ultra_c_mm
                 s.ext_ultra_r_mm = reading.ultra_r_mm
-                # Orientation - recompute from raw accel with mounting correction
-                # (bypasses ESP32's complementary filter which drifts with inverted axes)
                 ax = reading.ax_g * config.IMU_ACCEL_X_SIGN
                 ay = reading.ay_g * config.IMU_ACCEL_Y_SIGN
                 az = reading.az_g * config.IMU_ACCEL_Z_SIGN
                 s.ext_pitch = math.atan2(ay, math.sqrt(ax * ax + az * az)) * 180.0 / math.pi
                 s.ext_roll = math.atan2(-ax, az) * 180.0 / math.pi
-                s.ext_yaw = reading.yaw  # Yaw still from ESP32 gyro integration
-                # Raw IMU data (uncorrected)
+                s.ext_yaw = reading.yaw
                 s.ext_ax_g = reading.ax_g
                 s.ext_ay_g = reading.ay_g
                 s.ext_az_g = reading.az_g
@@ -217,46 +177,20 @@ class CozmoExplorer:
         else:
             logger.warning("External sensors not available - reactive collision detection only")
 
-        # Initialize vision observer first (state machine needs it)
-        self.vision_observer = VisionObserver(
+        # Initialize mapper state machine
+        self.mapper = MapperStateMachine(
             robot=self.robot,
-            llm_client=self.llm,
-            experience_db=self.experiences,
-            capture_interval=45.0,  # Capture every 45 seconds (battery saving)
-            enabled=True,
-            save_images=True  # Save images to data/images/
-        )
-
-        # Initialize state machine with all memory systems and learning
-        self.state_machine = StateMachine(
-            robot=self.robot,
-            llm_client=self.llm,
-            memory=self.experiences,
             spatial_map=self.spatial_map,
-            vision_observer=self.vision_observer,
-            learning_coordinator=self.learning_coordinator,
             experience_logger=self.experience_logger,
-            rules_store=self.rules_store
+            session_reviewer=self.session_reviewer,
+            annotation_store=self.annotation_store,
         )
-
-        # Give state machine access to voice for speaking decisions
-        if self.vision_observer.voice:
-            self.state_machine.voice = self.vision_observer.voice
-
-        # Set up callbacks
-        self.state_machine.set_state_change_callback(self._on_state_change)
-        self.state_machine.set_goal_complete_callback(self._on_goal_complete)
-
-        # Connect vision observations to memory context
-        self._setup_vision_callback()
 
         # Initialize manual controller if enabled
         if config.MANUAL_CONTROL_ENABLED:
             logger.info("Manual control enabled - creating controller")
             self.manual_controller = ManualController(
                 robot=self.robot,
-                experience_logger=self.experience_logger,
-                rules_store=self.rules_store,
                 on_mode_change=self._on_manual_mode_change
             )
             self._manual_mode = True
@@ -265,39 +199,28 @@ class CozmoExplorer:
 
         logger.info("Initialization complete!")
 
-        # Log mission start to journal
         trailer_status = "with trailer" if config.TRAILER_MODE else "without trailer"
-        manual_status = "manual control" if config.MANUAL_CONTROL_ENABLED else "autonomous"
-        self.personality.log_milestone(
-            "Mission Started",
-            f"Beginning exploration ({manual_status}, {trailer_status}). Previous experiences: {exp_count}. Systems nominal."
-        )
+        control_status = "manual control" if config.MANUAL_CONTROL_ENABLED else "autonomous"
+        logger.info(f"Mode: {control_status}, {trailer_status}")
 
         return True
 
     async def run(self):
-        """Main run loop"""
+        """Main run loop."""
         self._running = True
         self._start_time = datetime.now()
 
         # Start a new session
         session_id = self.state_store.start_session()
-        logger.info(f"Started exploration session {session_id}")
+        logger.info(f"Started mapping session {session_id}")
 
-        # Set session ID for experience logging
         if self.experience_logger:
             self.experience_logger.set_session_id(session_id)
 
-        # Set initial goal
-        self.state_machine.set_goal(Goal(
-            description="Explore and map the environment",
-            goal_type="explore"
-        ))
-
         try:
-            # Set head to look forward (not down)
-            await self.robot.set_head_angle(0.35)  # Look up/forward
-            logger.info("Head positioned for exploration")
+            # Set head to look forward
+            await self.robot.set_head_angle(0.35)
+            logger.info("Head positioned for mapping")
 
             # Start manual controller GUI if enabled
             if self.manual_controller:
@@ -305,20 +228,15 @@ class CozmoExplorer:
                 loop = asyncio.get_event_loop()
                 self.manual_controller.start(loop)
 
-                # Run GUI in a separate thread
                 import threading
                 gui_thread = threading.Thread(target=self.manual_controller.run_gui, daemon=True)
                 gui_thread.start()
                 logger.info("Manual control GUI running in background")
 
-            # Start state machine in background (if not in manual mode)
-            state_task = None
+            # Start mapper in background (if not in manual mode)
+            mapper_task = None
             if not self._manual_mode:
-                state_task = asyncio.create_task(self.state_machine.start())
-
-            # Start vision observer
-            await self.vision_observer.start()
-            logger.info("Vision observer started - capturing images every 20s")
+                mapper_task = asyncio.create_task(self.mapper.start())
 
             # Main monitoring loop
             last_status_time = datetime.now()
@@ -333,13 +251,15 @@ class CozmoExplorer:
                 # Refresh pose from pycozmo
                 self.robot._update_pose_from_client()
 
-                # Start/stop state machine based on mode changes
-                if not self._manual_mode and state_task is None:
-                    logger.info("Starting autonomous behaviors...")
-                    state_task = asyncio.create_task(self.state_machine.start())
-                elif self._manual_mode and state_task is not None:
-                    # Will be handled by pause/resume in state machine
-                    pass
+                # Start mapper if switching from manual to auto
+                if not self._manual_mode and mapper_task is None:
+                    logger.info("Starting mapper...")
+                    mapper_task = asyncio.create_task(self.mapper.start())
+
+                # Check if mapper finished
+                if self.mapper and self.mapper.state == MapperState.DONE:
+                    logger.info("Mapping complete!")
+                    break
 
                 # Periodic status (every 30 seconds)
                 now = datetime.now()
@@ -353,20 +273,16 @@ class CozmoExplorer:
             await self._shutdown()
 
     async def _shutdown(self):
-        """Clean shutdown"""
+        """Clean shutdown."""
         logger.info("Shutting down...")
 
         # Stop manual controller
         if self.manual_controller:
             self.manual_controller.stop()
 
-        # Stop vision observer
-        if self.vision_observer:
-            await self.vision_observer.stop()
-
-        # Stop state machine
-        if self.state_machine:
-            await self.state_machine.stop()
+        # Stop mapper
+        if self.mapper:
+            await self.mapper.stop()
 
         # Save state
         duration = (datetime.now() - self._start_time).total_seconds() if self._start_time else 0
@@ -374,14 +290,14 @@ class CozmoExplorer:
         self.state_store.save_robot_state(
             position={'x': self.robot.pose.x, 'y': self.robot.pose.y, 'angle': self.robot.pose.angle},
             battery=self.robot.sensors.battery_voltage,
-            exploration_time=self.state_machine.context.exploration_time if self.state_machine else 0
+            exploration_time=self.mapper.mapping_time if self.mapper else 0
         )
 
         self.state_store.end_session(
             duration=duration,
-            distance=self.state_machine.context.exploration_time * 50 if self.state_machine else 0,  # rough estimate
+            distance=self.mapper.mapping_time * 50 if self.mapper else 0,
             areas=int(self.spatial_map.get_visited_percentage() * 100),
-            summary=f"Explored for {duration:.0f}s"
+            summary=f"Mapped for {duration:.0f}s"
         )
 
         # Save map
@@ -390,181 +306,91 @@ class CozmoExplorer:
         except Exception as e:
             logger.error(f"Failed to save map: {e}")
 
-        # Log mission end to journal
-        self.personality.log_milestone(
-            "Mission Ended",
-            f"Exploration session complete. Duration: {duration:.0f}s. "
-            f"Area visited: {self.spatial_map.get_visited_percentage()*100:.1f}%"
-        )
+        # Print final stats
+        if self.mapper:
+            status = self.mapper.get_status()
+            logger.info(f"Final: {status['visited_pct']:.1f}% visited, "
+                       f"{status['escapes']} escapes, {status['frontier_targets']} targets")
 
-        # Print final memory usage
-        if self.llm:
-            self.llm.memory.print_usage()
-
-        # Print learning system status
-        if self.learning_coordinator:
-            status = self.learning_coordinator.get_status_summary()
-            logger.info(f"Learning system: {status['total_rules']} rules, {status['data_samples']} samples")
-            if status['by_status']:
-                logger.info(f"  Rules by status: {status['by_status']}")
+        if self.annotation_store:
+            ann_count = self.annotation_store.count()
+            if ann_count > 0:
+                logger.info(f"Annotations: {ann_count} stored")
 
         # Stop external sensors
         if self.external_sensors:
             self.external_sensors.stop()
 
-        # Disconnect and close learning components
+        # Disconnect
         await self.robot.disconnect()
         if self.llm:
             await self.llm.close()
-        await self.experiences.close()
         self.state_store.close()
 
         if self.experience_logger:
             self.experience_logger.close()
-        if self.rules_store:
-            self.rules_store.close()
+        if self.annotation_store:
+            self.annotation_store.close()
 
         logger.info("Shutdown complete")
 
-    def _on_state_change(self, old_state: RobotState, new_state: RobotState):
-        """Handle state changes"""
-        self.state_store.log_event(
-            "state_change",
-            f"{old_state.name} -> {new_state.name}",
-            {"from": old_state.name, "to": new_state.name}
-        )
-
-    def _on_goal_complete(self, goal: Goal, success: bool):
-        """Handle goal completion"""
-        logger.info(f"Goal {'completed' if success else 'failed'}: {goal.description}")
-        self.state_store.log_event(
-            "goal_complete",
-            goal.description,
-            {"success": success, "goal_type": goal.goal_type}
-        )
-
-        # Update memory context with outcome
-        if self.state_machine and self.state_machine.memory_context:
-            outcome = "completed" if success else "failed"
-            self.state_machine.memory_context.update_last_decision_outcome(outcome, success)
-
     def _on_manual_mode_change(self, is_manual: bool):
-        """Handle switching between manual and auto modes"""
+        """Handle switching between manual and auto modes."""
         self._manual_mode = is_manual
         if is_manual:
-            logger.info("Switched to MANUAL mode - autonomous behaviors paused")
-            if self.state_machine:
-                self.state_machine.pause()
+            logger.info("Switched to MANUAL mode")
+            if self.mapper:
+                self.mapper.pause()
         else:
-            logger.info("Switched to AUTO mode - autonomous behaviors resumed")
-            if self.state_machine:
-                self.state_machine.resume()
-
-    def _setup_vision_callback(self):
-        """Set up callback to feed vision observations to memory context"""
-        if not self.vision_observer:
-            return
-
-        # Store original method
-        original_capture = self.vision_observer._capture_and_analyze
-
-        async def capture_with_context_update():
-            """Wrapper that updates memory context after capture"""
-            observation = await original_capture()
-            if observation and self.state_machine:
-                # Update memory context with current observation
-                self.state_machine.memory_context.set_current_observation(
-                    observation.description
-                )
-
-                # Add to conversation memory (if LLM available)
-                if self.llm:
-                    self.llm.add_observation_to_memory(observation.description)
-
-                # Log to personality journal
-                location = (self.robot.pose.x, self.robot.pose.y)
-                self.personality.log_observation(observation.description, location)
-
-            return observation
-
-        # Replace with wrapped version
-        self.vision_observer._capture_and_analyze = capture_with_context_update
+            logger.info("Switched to AUTO mode")
+            if self.mapper:
+                self.mapper.resume()
 
     def _print_status(self):
-        """Print current status - Phase 1 focused"""
+        """Print current status."""
+        if not self.mapper:
+            return
+
+        status = self.mapper.get_status()
         robot = self.robot
-        sm = self.state_machine
 
         logger.info("-" * 40)
-
-        # Show mode
-        mode = "Phase 1 (Survival)" if config.PHASE1_PURE_SURVIVAL else "Phase 2+ (Directed)"
-        llm_status = "observer" if config.LLM_OBSERVER_MODE else "director"
-        if not self.llm:
-            llm_status = "disabled"
         control_mode = "MANUAL" if self._manual_mode else "AUTO"
         trailer_status = "TRAILER" if config.TRAILER_MODE else ""
-        logger.info(f"Mode: {mode} | LLM: {llm_status} | Control: {control_mode} {trailer_status}")
-
-        logger.info(f"State: {sm.state.name}")
+        logger.info(f"Mapper | Control: {control_mode} {trailer_status}")
+        logger.info(f"State: {status['state']}")
         logger.info(f"Position: ({robot.pose.x:.0f}, {robot.pose.y:.0f})")
         logger.info(f"Battery: {robot.sensors.battery_voltage:.2f}V")
-        logger.info(f"Exploration: {sm.context.exploration_time:.0f}s")
-        logger.info(f"Map: {self.spatial_map.get_visited_percentage()*100:.1f}% visited")
+        logger.info(f"Map: {status['visited_pct']:.1f}% visited, {status['explored_pct']:.1f}% known")
+        logger.info(f"Escapes: {status['escapes']} | Targets: {status['frontier_targets']}")
 
-        # Show external sensor status
-        if self.robot.sensors.ext_connected:
-            s = self.robot.sensors
+        if robot.sensors.ext_connected:
+            s = robot.sensors
             dists = s.get_obstacle_distances()
-            logger.info(f"Obstacles: F={dists['front']}mm L={dists['left']}mm R={dists['right']}mm")
-            logger.info(f"IMU: pitch={s.ext_pitch:.1f}° roll={s.ext_roll:.1f}° yaw={s.ext_yaw:.1f}°")
-
-        # Show learning system status (Phase 1 focus)
-        if self.learning_coordinator:
-            status = self.learning_coordinator.get_status_summary()
-            active_rules = status['by_status'].get('active', 0)
-            testing_rules = status['testing']
-            proposed_rules = status['by_status'].get('proposed', 0)
-            logger.info(f"Learning: {status['data_samples']} samples | Rules: {active_rules} active, {testing_rules} testing, {proposed_rules} proposed")
-
-            # Show recovery success rate if available
-            if self.experience_logger:
-                stats = self.experience_logger.get_recovery_statistics("escape_stall")
-                if stats.get('total', 0) > 0:
-                    logger.info(f"Recovery: {stats['total']} attempts, {stats.get('success_rate', 0)*100:.0f}% success rate")
-
-        # Show recent observations (less prominent in Phase 1)
-        if not config.PHASE1_PURE_SURVIVAL and self.vision_observer and self.vision_observer.recent_observations:
-            recent = self.vision_observer.get_recent_descriptions(3)
-            if recent:
-                logger.info("Recent observations:")
-                for obs in recent:
-                    logger.info(f"  - {obs[:60]}...")
+            logger.info(f"Sensors: F={dists['front']}mm L={dists['left']}mm R={dists['right']}mm")
+            logger.info(f"IMU: pitch={s.ext_pitch:.1f} roll={s.ext_roll:.1f} yaw={s.ext_yaw:.1f}")
 
         logger.info("-" * 40)
 
     def stop(self):
-        """Request stop"""
+        """Request stop."""
         self._running = False
 
 
 async def main():
-    """Main entry point"""
+    """Main entry point."""
     explorer = CozmoExplorer()
 
-    # Handle Ctrl+C gracefully
     def signal_handler(sig, frame):
         logger.info("Interrupt received, stopping...")
         explorer.stop()
 
     signal.signal(signal.SIGINT, signal_handler)
 
-    # Initialize
     if not await explorer.initialize():
         logger.error("Initialization failed!")
         return 1
 
-    # Run
     try:
         await explorer.run()
     except Exception as e:

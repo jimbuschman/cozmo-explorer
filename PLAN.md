@@ -1,57 +1,59 @@
-# Cozmo Explorer - Autonomous Robot Project
+# Cozmo Explorer - Autonomous Mapping Platform
 
 ## Overview
 
-An autonomous exploration system for a Cozmo robot, using an LLM for high-level decision making. The robot explores its environment, builds a map, remembers what it's seen, and makes its own decisions about what to investigate next.
+An autonomous mapping platform using a Cozmo robot with an ESP32 sensor pod and trailer. The robot explores rooms, builds an occupancy grid map, and the system (LLM + database) learns about the environment from completed maps.
 
-This is a fun experiment applying autonomy/self-directed learning concepts to physical robotics.
+**Core principle: "The system learns, not Cozmo."** Cozmo drives toward unexplored areas, collects sensor data, and builds the map. After a session, the LLM reviews the map and produces semantic annotations. The robot is a surveyor; intelligence lives in the system around it.
 
 ## Origin
 
-This project builds on concepts from the EchoFrontendV2 project (C#/.NET), which implemented:
-- Multi-pool memory management with token budgeting
-- Embedding-based semantic recall
-- Background job queues for async LLM calls
-- Function calling patterns
-
-Those patterns translate well to robotics:
-- Memory pools → attention budget for sensors, goals, spatial memory
-- Embeddings → "have I seen this before?" recall
-- Async queues → non-blocking LLM queries while robot moves
-- Function calls → robot queries knowledge, updates beliefs
+This project started as an experiment in embodied AI, building on concepts from the EchoFrontendV2 project (C#/.NET). It went through a rule-based learning phase (archived) before arriving at the current mapping platform architecture, which proved far more effective.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                      YOUR PC                                 │
-│                                                              │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │                    BRAIN                              │  │
-│  │  State Machine: IDLE → EXPLORE → INVESTIGATE → ...   │  │
-│  └──────────────────────────────────────────────────────┘  │
-│          │                              │                    │
-│          ▼                              ▼                    │
-│  ┌───────────────┐              ┌───────────────────────┐  │
-│  │  Ollama LLM   │              │  Memory (ChromaDB)    │  │
-│  │  "What next?" │              │  "Have I seen this?"  │  │
-│  └───────────────┘              └───────────────────────┘  │
-│          │                              │                    │
-│          └──────────────┬───────────────┘                   │
-│                         ▼                                    │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │                 pycozmo Client                        │  │
-│  │  - Motors/movement                                    │  │
-│  │  - Camera frames                                      │  │
-│  │  - Sensor readings                                    │  │
-│  └──────────────────────────────────────────────────────┘  │
-│                         │                                    │
-└─────────────────────────┼────────────────────────────────────┘
+│                         YOUR PC                               │
+│                                                               │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │                MAPPER STATE MACHINE                     │  │
+│  │  MAPPING → CAPTURING → REVIEWING → DONE                │  │
+│  │     │                                                   │  │
+│  │     └─ FrontierNavigator                                │  │
+│  │        - find nearest frontier on map                   │  │
+│  │        - drive toward it                                │  │
+│  │        - update map continuously (sensor ray-tracing)   │  │
+│  │        - escape if stuck (reverse-arc, deterministic)   │  │
+│  │        - detect stagnation → relocate                   │  │
+│  └────────────────────────────────────────────────────────┘  │
+│          │                              │                      │
+│          ▼                              ▼                      │
+│  ┌───────────────┐           ┌──────────────────────────┐    │
+│  │  Ollama LLM   │           │  Memory (SQLite)         │    │
+│  │  Post-session  │           │  - Spatial map (.npz)    │    │
+│  │  map review    │           │  - Map annotations       │    │
+│  └───────────────┘           │  - Session logs          │    │
+│                               │  - State persistence     │    │
+│                               └──────────────────────────┘    │
+│          │                                                     │
+│          ▼                                                     │
+│  ┌──────────────────────────────────────────────────────┐    │
+│  │                 pycozmo Client                        │    │
+│  │  - Motors/movement      - Camera frames               │    │
+│  │  - Sensor readings      - Pose tracking               │    │
+│  └──────────────────────────────────────────────────────┘    │
+│                         │                                      │
+└─────────────────────────┼──────────────────────────────────────┘
                           │ WiFi (UDP)
-                          ▼
-                   ┌─────────────┐
-                   │   COZMO     │
-                   └─────────────┘
+              ┌───────────┴───────────┐
+              │                       │
+              ▼                       ▼
+       ┌─────────────┐        ┌─────────────┐
+       │   COZMO     │        │   ESP32     │
+       │   (WiFi)    │        │   (UDP)     │
+       │   + trailer │        │   Sensors   │
+       └─────────────┘        └─────────────┘
 ```
 
 ## Tech Stack
@@ -59,205 +61,150 @@ Those patterns translate well to robotics:
 | Component | Choice | Why |
 |-----------|--------|-----|
 | Language | Python 3.11+ | Robotics ecosystem, async, pycozmo compatibility |
-| Vector DB | ChromaDB (embedded) | Lightweight, no server, handles similarity search |
-| Regular DB | SQLite | Map storage, state persistence |
-| LLM | Ollama (local) | Runs on PC, no API costs |
+| Database | SQLite | State persistence, annotations, experience logs |
+| LLM | Ollama (local, Gemma 3) | Runs on PC, no API costs, post-session review |
 | Robot SDK | pycozmo | Direct WiFi control, no phone app needed |
+| Map | NumPy occupancy grid | 50mm resolution, sensor ray-tracing |
+| Simulation | Custom (pygame rendering) | Physics + 4 simulated sensors, 10x time scaling |
 
 ## Project Structure
 
 ```
 cozmo-explorer/
-├── main.py                    # Entry point
-├── config.py                  # Settings
+├── main.py                         # Entry point (mapping platform)
+├── config.py                       # All tunable parameters
+├── CLAUDE.md                       # Context for Claude Code sessions
 │
 ├── brain/
-│   ├── state_machine.py       # Core loop: sense → think → act
-│   ├── behaviors.py           # Wander, wall-follow, go-to, look-around
-│   ├── memory_context.py      # Rich context builder for LLM decisions
-│   └── personality.py         # Journal system, identity prompt
+│   ├── frontier_navigator.py       # FrontierNavigator - main navigation loop
+│   ├── mapper_state_machine.py     # MapperStateMachine - 4-state mapping cycle
+│   ├── session_reviewer.py         # Post-session LLM map review
+│   ├── behaviors.py                # Base behaviors (DriveDistance, TurnAngle, etc)
+│   ├── state_machine.py            # Legacy state machine (unused by mapper)
+│   ├── memory_context.py           # Context builder for LLM
+│   └── personality.py              # Journal system
 │
 ├── memory/
-│   ├── spatial_map.py         # Where have I been? What's where?
-│   ├── experience_db.py       # ChromaDB - visual/semantic memories
-│   ├── state_store.py         # SQLite - persistent state
-│   └── conversation_memory.py # Token-budgeted memory pools for LLM context
+│   ├── spatial_map.py              # Occupancy grid, frontier finding, ray-tracing
+│   ├── map_annotations.py          # SQLite semantic annotations from LLM review
+│   ├── experience_logger.py        # Session data logging (SQLite)
+│   ├── state_store.py              # Session management, robot state persistence
+│   ├── experience_db.py            # ChromaDB (legacy, kept for future use)
+│   └── conversation_memory.py      # Token-budgeted memory pools (legacy)
 │
 ├── perception/
-│   ├── camera.py              # Frame capture, basic processing
-│   ├── vision_observer.py     # Periodic vision analysis with LLaVA
-│   └── sensors.py             # Cliff, accel, gyro aggregation
+│   ├── external_sensors.py         # ESP32 serial/UDP reader
+│   ├── camera.py                   # Frame capture
+│   └── vision_observer.py          # Vision analysis
 │
 ├── llm/
-│   ├── client.py              # Talk to Ollama, structured JSON decisions
-│   └── prompts.py             # Centralized prompt templates
+│   ├── client.py                   # Ollama client
+│   ├── review_prompts.py           # Map review prompts (post-session)
+│   └── prompts.py                  # Legacy prompts
+│
+├── cozmo_interface/
+│   └── robot.py                    # Robot control wrapper (pycozmo)
+│
+├── simulator/
+│   ├── run_full_sim.py             # Headless simulation harness
+│   ├── run_sim.py                  # Interactive simulation
+│   ├── sim_robot.py                # Simulated robot (physics + ray-cast sensors)
+│   ├── physics.py                  # 2D physics engine
+│   ├── world.py                    # World definitions (rooms, furniture)
+│   └── renderer.py                 # Pygame visualization
+│
+├── control/
+│   └── manual_controller.py        # Tkinter GUI for manual driving
 │
 ├── audio/
-│   └── voice.py               # TTS + audio processing for speech (chunked playback)
+│   └── voice.py                    # TTS + chunked audio playback
 │
-└── cozmo_interface/
-    └── robot.py               # Wrapper around pycozmo
+├── archive/                        # Archived code (old rule-learning system)
+│   ├── learning_coordinator.py     # LLM-based rule proposal pipeline
+│   ├── learned_rules.py            # Rule storage/matching/application
+│   ├── pattern_analyzer.py         # Recovery pattern analysis
+│   └── maneuvers.py                # ZigzagManeuver
+│
+├── docs/                           # Documentation
+│   ├── ARCHITECTURE.md             # System architecture details
+│   ├── READING_ORDER.md            # Quick-start reading guide
+│   ├── HARDWARE_SETUP.md           # Hardware architecture
+│   ├── ESP32_INTEGRATION.md        # Sensor pod details
+│   ├── SETUP_GUIDE.md              # How to run
+│   └── archive/                    # Archived docs (old architecture)
+│
+├── scripts/
+│   ├── check_status.py             # Database health check
+│   └── test_charger_bypass.py      # Hardware test
+│
+└── data/                           # Runtime data (not in git)
+    ├── state.db                    # SQLite database
+    ├── spatial_map.npz             # Occupancy grid
+    ├── mapping_images/             # Images captured during mapping
+    ├── cozmo.log                   # Session log
+    └── sim_report_*.txt            # Simulation reports
 ```
 
-## Cozmo Capabilities (via pycozmo)
+## Hardware
 
-| Category | Capabilities |
-|----------|--------------|
-| Movement | Wheel motors, head angle, lift position |
-| Vision | Camera feed (frame capture) |
-| Sensors | Cliff detectors, accelerometer, gyroscope |
-| Feedback | OLED face display, LEDs, speaker |
-| Data | Battery voltage, pose tracking |
+| Component | Details |
+|-----------|---------|
+| Cozmo robot | pycozmo WiFi control, trailer attached |
+| ESP32 sensor pod | ToF + 3x ultrasonic + MPU6050 IMU, JSON over UDP port 5000 |
+| Arduino Nano relay | Powers ESP32 (must be plugged in) |
+| Trailer | Carries sensor pod, requires arc-based turns |
 
-## State Machine States
+## How It Works
 
-| State | Description |
-|-------|-------------|
-| IDLE | Waiting, conserving power |
-| EXPLORE | Wandering to discover new areas |
-| GO_TO | Navigating to a specific point |
-| INVESTIGATE | Looking closely at something interesting |
-| STUCK | Can't make progress, need help or reroute |
-| CHARGING | On charger, waiting for battery |
+1. **MAPPING**: FrontierNavigator finds the nearest unexplored boundary on the occupancy grid and drives toward it. Sensors ray-trace into the map continuously. If stuck, it executes a deterministic reverse-arc escape (135 degrees away from the closer obstacle).
 
-## Autonomy Framework (from original concept)
+2. **Stagnation detection**: If map coverage gain drops below 0.5% per 60s, the navigator switches to relocation mode - using cluster-based frontier selection to find a large unexplored region and drive there.
 
-The original "Autonomy & Self-Directed Growth Framework" maps to robot behaviors:
+3. **CAPTURING**: Periodically captures images at new positions for later LLM review.
 
-| Original Concept | Robot Implementation |
-|-----------------|----------------------|
-| Self-Driven Goal Formation | "I haven't explored that area yet" |
-| Iterative Self-Improvement | "My distance estimates are off, recalibrate" |
-| Decision-Making & Prioritization | "Battery low - return to base vs. finish room" |
-| Reflection & Course Correction | "I keep getting stuck here, mark as difficult" |
-| Intrinsic Curiosity | "What's behind that obstacle?" |
+4. **REVIEWING**: After mapping completes, the LLM reviews the ASCII map + session stats and produces semantic annotations (room type, landmarks, doorways, coverage gaps).
 
-## Implementation Phases
+5. **Annotations persist** in SQLite alongside the spatial map, building a persistent understanding of the environment that any robot or system can use later.
 
-### Phase 1: Foundation ✓
-- [x] Project setup (requirements.txt, basic structure)
-- [x] pycozmo connection and basic control
-- [x] Simple behaviors (drive, turn, stop)
-- [x] Camera frame capture
+## Running
 
-### Phase 2: Basic Autonomy ✓
-- [x] State machine framework
-- [x] Wander behavior (random exploration)
-- [x] Cliff/obstacle avoidance
-- [x] Basic spatial tracking (where am I?)
+```bash
+# Real robot
+python main.py
 
-### Phase 3: Memory ✓
-- [x] SQLite state persistence
-- [x] ChromaDB for experience storage
-- [x] Simple occupancy grid or visited-points map
-- [x] "Have I been here before?" queries
+# Simulation (headless, fast)
+python -m simulator.run_full_sim --world furnished_room --duration 3600 --time-scale 10
 
-### Phase 4: LLM Integration ✓
-- [x] Ollama client
-- [x] State-to-prompt formatting
-- [x] Goal parsing from LLM responses
-- [x] Periodic "what should I do?" queries
+# Simulation (rendered, visual)
+python -m simulator.run_full_sim --world furnished_room --duration 600 --time-scale 5 --render
 
-### Phase 4.5: Memory-Augmented Decisions ✓
-- [x] Conversation memory with token-budgeted pools (ported from EchoFrontendV2)
-- [x] Memory context builder (gathers from all systems for LLM)
-- [x] Structured JSON decision parsing with fallback
-- [x] Auto-summarization when memory pools overflow
-- [x] Exploration journal system (JSON file)
-- [x] Vision observations feed into conversation memory
-- [x] Decision history tracking with outcomes
-
-### Phase 5: Polish & Expansion (Future)
-- [ ] Better mapping (visual odometry?)
-- [ ] Object detection/recognition
-- [ ] More sophisticated exploration strategies
-- [ ] Multiple robot support (future)
-- [ ] Visual place recognition ("I've been here before")
-- [ ] Personality/character customization
-
-## Connection Steps (pycozmo)
-
-1. Place Cozmo on charging platform
-2. Raise and lower lift to display WiFi PSK
-3. Connect PC to Cozmo's WiFi network using displayed password
-4. Run the application
-
-## Dependencies
-
-```
-pycozmo>=0.8.0
-chromadb
-ollama
-httpx
-numpy
-Pillow
+# Interactive simulation
+python -m simulator.run_sim
 ```
 
-## Future: Raspberry Pi Migration
+## Current Performance (2026-02-07)
 
-If migrating to a Pi-based custom robot later:
-- Brain/memory code transfers directly (pure Python)
-- Replace pycozmo interface with custom sensor/motor bridge
-- Add ESP32 microcontrollers for real-time control
-- Pi handles high-level logic, microcontrollers handle reflexes
+| Metric | Value |
+|--------|-------|
+| Map known | 56.5% in 7200s sim (12 min wall clock at 10x) |
+| Cells visited | 1.1% (114 cells physically traversed) |
+| Escapes | 18 |
+| Stagnation relocations | 3 |
+| Rules used | 0 (pure frontier navigation) |
+| LLM calls during navigation | 0 |
 
-## Memory Architecture
+Compare: old rule-based system achieved 1.6% in 10 hours with 2,884 escapes.
 
-The LLM receives context from multiple memory pools, each with a token budget:
+## Future Directions
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                   32,000 Token Budget                        │
-├──────────┬──────────┬──────────┬──────────┬────────────────┤
-│  Core    │ Active   │ Recent   │ Recall   │    Buffer      │
-│  10%     │ Session  │ History  │  30%     │     10%        │
-│ (2048cap)│   35%    │   15%    │ (8192cap)│                │
-├──────────┼──────────┼──────────┼──────────┼────────────────┤
-│ Identity │ Current  │ Summar-  │ ChromaDB │ Spatial        │
-│ prompt   │ decisions│ ized old │ semantic │ context        │
-│          │ & obs    │ sessions │ memories │                │
-└──────────┴──────────┴──────────┴──────────┴────────────────┘
-```
-
-**Flow:**
-1. Vision observer captures image → LLaVA describes it → saves to ChromaDB + ActiveSession
-2. State machine asks LLM for decision
-3. MemoryContext gathers from all pools + spatial map + decision history
-4. LLM returns structured JSON: `{action, target, reasoning, speak}`
-5. Decision recorded in memory, outcome tracked
-6. When ActiveSession overflows → oldest items summarized → moved to RecentHistory
-
-**Data Files:**
-- `data/exploration_journal.json` - Human-readable log of observations/decisions
-- `data/chroma/` - ChromaDB semantic experience storage
-- `data/state.db` - SQLite state persistence
-- `data/spatial_map.npz` - Occupancy grid (where robot has been)
-
-## Audio System
-
-The voice module generates robot-like speech from text and plays it through Cozmo's speaker.
-
-**Pipeline:**
-1. **TTS Generation**: pyttsx3 generates raw speech WAV
-2. **Robot Effects**: librosa applies pitch shift (+4 steps) and time stretch (1.1x)
-3. **Chunked Conversion**: Audio split into 2-second chunks for pycozmo compatibility
-4. **Sequential Playback**: Each chunk played through Cozmo, waiting for completion
-
-**Why Chunking?**
-- pycozmo's audio buffer can't handle audio longer than ~2 seconds
-- Previous approach truncated audio, losing speech after 2s
-- Chunking preserves full speech by splitting into `_part1.wav`, `_part2.wav`, etc.
-- Each chunk has fade in/out (20ms) to prevent clicks between segments
-
-**Audio Format Requirements:**
-- Sample rate: 22050 Hz
-- Bit depth: 16-bit PCM
-- Channels: Mono
-- Max chunk duration: 2 seconds
+- **Real robot testing** - verify sim results translate to physical hardware
+- **Platform migration** - may switch from Cozmo to SMARS for better mobility
+- **Multi-room mapping** - extend to explore across doorways
+- **Post-session LLM** - develop the annotation pipeline for richer environment understanding
+- **Multi-robot fleet** - specialized robots (mapper, photographer, scout) sharing a common map
 
 ## Resources
 
 - [pycozmo GitHub](https://github.com/zayfod/pycozmo)
 - [pycozmo Documentation](https://pycozmo.readthedocs.io/)
-- [ChromaDB](https://www.trychroma.com/)
 - [Ollama](https://ollama.ai/)

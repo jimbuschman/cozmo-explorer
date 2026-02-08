@@ -29,7 +29,7 @@ import config
 if TYPE_CHECKING:
     from cozmo_interface.robot import CozmoRobot
     from memory.experience_logger import ExperienceLogger
-    from memory.learned_rules import LearnedRulesStore
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -364,7 +364,7 @@ Esc           Exit
     def _arc_left(self):
         if not self._manual_mode:
             return
-        ratio = config.ARC_RATIOS.get("gentle", 0.5)
+        ratio = config.TRAILER_ARC_RATIO
         self._update_status(f"Arc turn left (ratio={ratio})...")
         self._log_manual_action("arc_turn", {"direction": "left", "ratio": ratio})
         self._run_async(self.robot.arc_turn_left(self.ARC_SPEED, ratio, 0.5))
@@ -372,7 +372,7 @@ Esc           Exit
     def _arc_right(self):
         if not self._manual_mode:
             return
-        ratio = config.ARC_RATIOS.get("gentle", 0.5)
+        ratio = config.TRAILER_ARC_RATIO
         self._update_status(f"Arc turn right (ratio={ratio})...")
         self._log_manual_action("arc_turn", {"direction": "right", "ratio": ratio})
         self._run_async(self.robot.arc_turn_right(self.ARC_SPEED, ratio, 0.5))
@@ -380,7 +380,7 @@ Esc           Exit
     def _reverse_arc_left(self):
         if not self._manual_mode:
             return
-        ratio = config.ARC_RATIOS.get("gentle", 0.5)
+        ratio = config.TRAILER_ARC_RATIO
         self._update_status(f"Reverse arc left (ratio={ratio})...")
         self._log_manual_action("reverse_arc_turn", {"direction": "left", "ratio": ratio})
         self._run_async(self.robot.reverse_arc_turn_left(self.ARC_SPEED, ratio, 0.5))
@@ -388,7 +388,7 @@ Esc           Exit
     def _reverse_arc_right(self):
         if not self._manual_mode:
             return
-        ratio = config.ARC_RATIOS.get("gentle", 0.5)
+        ratio = config.TRAILER_ARC_RATIO
         self._update_status(f"Reverse arc right (ratio={ratio})...")
         self._log_manual_action("reverse_arc_turn", {"direction": "right", "ratio": ratio})
         self._run_async(self.robot.reverse_arc_turn_right(self.ARC_SPEED, ratio, 0.5))

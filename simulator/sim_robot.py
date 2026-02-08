@@ -319,13 +319,14 @@ class SimRobot:
             self.state.theta = self._prev_theta
             self.state.trailer_phi = self._prev_phi
 
-            # Stop wheels and flag collision (same as real accelerometer handler)
-            self.state.left_speed = 0.0
-            self.state.right_speed = 0.0
-
             if not self._escape_in_progress:
+                # Stop wheels and flag collision (same as real accelerometer handler)
+                self.state.left_speed = 0.0
+                self.state.right_speed = 0.0
                 self.sensors.collision_detected = True
                 logger.debug(f"COLLISION at ({self.state.x:.0f}, {self.state.y:.0f})")
+            # During escape: revert position but keep wheels running so the
+            # escape arc can continue sliding along walls instead of freezing.
 
     def _update_sensors(self):
         """Update simulated sensor readings via ray-casting (called at ~20Hz).

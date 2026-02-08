@@ -4,11 +4,10 @@ Simulator entry point.
 Run: python -m simulator.run_sim
 
 Controls:
-    A           Start/stop autonomous wander (the main thing to test)
+    A           Start/stop autonomous frontier navigation
     Space       Pause/resume physics
     R           Reset to spawn
     1-4         Switch world preset
-    Z           Run zigzag maneuver once
     Arrow keys  Manual drive
     Esc         Quit
 """
@@ -34,37 +33,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def run_zigzag(sim_robot):
-    """Run the zigzag maneuver on the sim robot."""
-    from brain.maneuvers import ZigzagManeuver
+async def run_frontier_nav(sim_robot, spatial_map):
+    """Run FrontierNavigator autonomously - drives toward unexplored areas."""
+    from brain.frontier_navigator import FrontierNavigator
 
-    left = sim_robot.sensors.ext_ultra_l_mm
-    right = sim_robot.sensors.ext_ultra_r_mm
-    if left > right:
-        direction = "left"
-    elif right > left:
-        direction = "right"
-    else:
-        direction = "left"
-
-    maneuver = ZigzagManeuver(sim_robot, sim_robot.sensors)
-    return await maneuver.execute(direction)
-
-
-async def run_wander(sim_robot, spatial_map=None):
-    """Run WanderBehavior autonomously - same code as the real robot."""
-    from brain.behaviors import WanderBehavior
-
-    wander = WanderBehavior(
+    nav = FrontierNavigator(
         robot=sim_robot,
-        duration=600.0,  # 10 minutes - long run to observe behavior
-        speed=config.WANDER_SPEED,
-        turn_probability=0.1,
         spatial_map=spatial_map,
+        duration=600.0,  # 10 minutes
+        speed=config.WANDER_SPEED,
     )
-    logger.info("Autonomous wander started")
-    result = await wander.run()
-    logger.info(f"Wander finished: {result.status.name} - {result.message}")
+    logger.info("Frontier navigation started")
+    result = await nav.run()
+    logger.info(f"Navigation finished: {result.name} - {nav.escapes} escapes, {nav.frontier_targets} targets")
     return result
 
 
@@ -113,23 +94,17 @@ async def main():
                     renderer.spatial_map = spatial_map
                     maneuver_status = f"Loaded: {world.name}"
 
-            # Toggle autonomous wander
+            # Toggle autonomous frontier navigation
             if actions.get('auto_wander'):
                 if auto_mode:
                     cancel_behavior()
                     maneuver_status = "Auto stopped"
-                    logger.info("Auto wander stopped by user")
+                    logger.info("Auto navigation stopped by user")
                 else:
                     cancel_behavior()
                     auto_mode = True
-                    maneuver_status = "AUTO WANDER"
-                    behavior_task = asyncio.create_task(run_wander(sim_robot, spatial_map))
-
-            # Manual zigzag trigger (only when not in auto mode)
-            if actions.get('zigzag') and not auto_mode:
-                if behavior_task is None or behavior_task.done():
-                    maneuver_status = "Zigzag..."
-                    behavior_task = asyncio.create_task(run_zigzag(sim_robot))
+                    maneuver_status = "AUTO NAV"
+                    behavior_task = asyncio.create_task(run_frontier_nav(sim_robot, spatial_map))
 
             # Manual drive controls (only when not in auto mode)
             if not auto_mode:
@@ -156,7 +131,7 @@ async def main():
             if behavior_task and behavior_task.done():
                 try:
                     result = behavior_task.result()
-                    maneuver_status = f"{result.status.name}: {result.message}"
+                    maneuver_status = f"Nav: {result.name}" if hasattr(result, 'name') else str(result)
                 except asyncio.CancelledError:
                     maneuver_status = "Cancelled"
                 except Exception as e:
@@ -168,10 +143,12 @@ async def main():
             # Show auto mode in status
             if auto_mode and behavior_task and not behavior_task.done():
                 front = sim_robot.sensors.get_front_obstacle_distance()
+                visited_pct = spatial_map.get_visited_percentage() * 100
                 maneuver_status = (
-                    f"AUTO WANDER | front={front}mm "
+                    f"AUTO NAV | front={front}mm "
                     f"L={sim_robot.sensors.ext_ultra_l_mm} "
-                    f"R={sim_robot.sensors.ext_ultra_r_mm}"
+                    f"R={sim_robot.sensors.ext_ultra_r_mm} "
+                    f"map={visited_pct:.1f}%"
                 )
 
             # Pause physics
