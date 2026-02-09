@@ -787,21 +787,61 @@ class CozmoRobot:
 
 # Convenience function for quick testing
 async def test_connection():
-    """Quick test to verify Cozmo connection works"""
+    """
+    Connection test + battery drain loop.
+
+    Drives back and forth continuously, reporting battery voltage every 30s.
+    Ctrl+C to stop. Useful for draining the battery to test charging.
+    """
     async with CozmoRobot() as robot:
-        if robot.is_connected:
-            print("Connected to Cozmo!")
-            print(f"Battery: {robot.sensors.battery_voltage}V")
-
-            # Quick movement test
-            await robot.drive(50, duration=1.0)
-            await asyncio.sleep(1.0)
-            await robot.turn(90)
-            await robot.stop()
-
-            print("Test complete!")
-        else:
+        if not robot.is_connected:
             print("Failed to connect")
+            return
+
+        print("Connected to Cozmo!")
+        robot._update_pose_from_client()
+        print(f"Battery: {robot.sensors.battery_voltage}V")
+        print("Running battery drain loop (Ctrl+C to stop)...")
+        print()
+
+        import time
+        start = time.time()
+        last_report = start
+        cycles = 0
+
+        try:
+            while True:
+                # Drive forward
+                await robot.drive(80)
+                await asyncio.sleep(3.0)
+                await robot.stop()
+
+                # Turn
+                await robot.turn(120)
+
+                cycles += 1
+                now = time.time()
+
+                # Report every 30 seconds
+                if now - last_report >= 30:
+                    robot._update_pose_from_client()
+                    elapsed = now - start
+                    v = robot.sensors.battery_voltage
+                    mins = int(elapsed // 60)
+                    secs = int(elapsed % 60)
+                    print(f"[{mins:02d}:{secs:02d}] Battery: {v:.2f}V | Cycles: {cycles}")
+                    if v > 0 and v < config.LOW_BATTERY_VOLTAGE:
+                        print(f"  ** LOW BATTERY ({v:.2f}V < {config.LOW_BATTERY_VOLTAGE}V) **")
+                    last_report = now
+
+        except (KeyboardInterrupt, asyncio.CancelledError):
+            await robot.stop()
+            elapsed = time.time() - start
+            mins = int(elapsed // 60)
+            secs = int(elapsed % 60)
+            print(f"\nStopped after {mins}m {secs}s, {cycles} cycles")
+            robot._update_pose_from_client()
+            print(f"Final battery: {robot.sensors.battery_voltage}V")
 
 
 if __name__ == "__main__":
