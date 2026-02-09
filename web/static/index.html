@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Cozmo Explorer</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    min-height: 100vh;
+  }
+
+  /* Header */
+  .header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    background: #16213e;
+    border-bottom: 2px solid #0f3460;
+  }
+  .header h1 {
+    font-size: 20px;
+    font-weight: 600;
+    color: #e94560;
+    letter-spacing: 1px;
+  }
+  .header-controls { display: flex; gap: 8px; }
+
+  /* Buttons */
+  button {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 4px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: opacity 0.15s;
+  }
+  button:hover { opacity: 0.85; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  .btn-start { background: #28a745; color: white; }
+  .btn-pause { background: #ffc107; color: #1a1a2e; }
+  .btn-stop { background: #dc3545; color: white; }
+  .btn-small { padding: 4px 10px; font-size: 12px; }
+
+  /* Controls bar */
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 10px 20px;
+    background: #1a1a3e;
+    border-bottom: 1px solid #0f3460;
+    flex-wrap: wrap;
+  }
+  .controls label { font-size: 13px; color: #aaa; }
+  .controls select, .controls input {
+    background: #16213e;
+    color: #e0e0e0;
+    border: 1px solid #0f3460;
+    border-radius: 3px;
+    padding: 5px 8px;
+    font-size: 13px;
+  }
+  .controls input[type="number"] { width: 70px; }
+
+  /* Main layout */
+  .main {
+    display: grid;
+    grid-template-columns: 420px 1fr;
+    gap: 16px;
+    padding: 16px 20px;
+  }
+
+  /* Map panel */
+  .map-panel {
+    background: #16213e;
+    border-radius: 6px;
+    padding: 12px;
+  }
+  .map-panel h2 {
+    font-size: 14px;
+    color: #aaa;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .map-container {
+    background: #0a0a1a;
+    border-radius: 4px;
+    padding: 4px;
+    display: flex;
+    justify-content: center;
+  }
+  .map-container img {
+    width: 400px;
+    height: 400px;
+    image-rendering: pixelated;
+  }
+  .legend {
+    display: flex;
+    gap: 12px;
+    margin-top: 8px;
+    font-size: 12px;
+    color: #aaa;
+    flex-wrap: wrap;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .legend-swatch {
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+    display: inline-block;
+  }
+
+  /* Status panel */
+  .status-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .status-section {
+    background: #16213e;
+    border-radius: 6px;
+    padding: 12px 16px;
+  }
+  .status-section h2 {
+    font-size: 14px;
+    color: #aaa;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+
+  .stat-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 16px;
+  }
+  .stat {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+  }
+  .stat-label { color: #888; }
+  .stat-value { color: #e0e0e0; font-family: 'Consolas', monospace; font-weight: 600; }
+  .stat-value.highlight { color: #e94560; font-size: 16px; }
+
+  /* Connection indicator */
+  .connection-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 4px;
+  }
+  .dot-connected { background: #28a745; }
+  .dot-disconnected { background: #dc3545; }
+
+  /* Log panel */
+  .log-panel {
+    grid-column: 1 / -1;
+    background: #16213e;
+    border-radius: 6px;
+    padding: 12px 16px;
+  }
+  .log-panel h2 {
+    font-size: 14px;
+    color: #aaa;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .log-content {
+    background: #0a0a1a;
+    border-radius: 4px;
+    padding: 8px;
+    height: 200px;
+    overflow-y: auto;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #b0b0b0;
+  }
+  .log-content div { white-space: pre; }
+
+  /* State badge */
+  .state-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .state-idle { background: #333; color: #888; }
+  .state-mapping { background: #155724; color: #28a745; }
+  .state-capturing { background: #1b2a4a; color: #4dabf7; }
+  .state-reviewing { background: #3d2e0c; color: #ffc107; }
+  .state-done { background: #0f3460; color: #e94560; }
+  .state-error { background: #4a0e0e; color: #dc3545; }
+  .state-paused { background: #3d2e0c; color: #ffc107; }
+
+  /* Responsive */
+  @media (max-width: 900px) {
+    .main { grid-template-columns: 1fr; }
+    .map-container img { width: 100%; height: auto; }
+  }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div class="header">
+  <h1>COZMO EXPLORER</h1>
+  <div class="header-controls">
+    <button class="btn-pause" id="btnPause" disabled onclick="togglePause()">Pause</button>
+    <button class="btn-stop" id="btnStop" disabled onclick="stopSession()">Stop</button>
+  </div>
+</div>
+
+<!-- Controls -->
+<div class="controls">
+  <label>Mode:</label>
+  <select id="selMode">
+    <option value="sim">Simulator</option>
+    <option value="real">Real Robot</option>
+  </select>
+
+  <label>World:</label>
+  <select id="selWorld">
+    <option value="furnished_room">furnished_room</option>
+    <option value="multi_room">multi_room</option>
+    <option value="corridor">corridor</option>
+    <option value="corner">corner</option>
+    <option value="dead_end">dead_end</option>
+    <option value="box">box</option>
+  </select>
+
+  <label>Time Scale:</label>
+  <input type="number" id="inpTimeScale" value="10" min="1" max="50">
+
+  <label>Duration (s):</label>
+  <input type="number" id="inpDuration" value="3600" min="60" max="36000" step="60">
+
+  <button class="btn-start" id="btnStart" onclick="startSession()">Start Mapping</button>
+</div>
+
+<!-- Main content -->
+<div class="main">
+
+  <!-- Map -->
+  <div class="map-panel">
+    <h2>Occupancy Map</h2>
+    <div class="map-container">
+      <img id="mapImg" src="/api/map.png" alt="Map">
+    </div>
+    <div class="legend">
+      <div class="legend-item"><span class="legend-swatch" style="background:#1e1e1e"></span> Unknown</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:#287828"></span> Free</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:#c83232"></span> Wall</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:#3232b4"></span> Visited</div>
+      <div class="legend-item"><span class="legend-swatch" style="background:#ffdc28"></span> Robot</div>
+    </div>
+  </div>
+
+  <!-- Status -->
+  <div class="status-panel">
+    <div class="status-section">
+      <h2>Status</h2>
+      <div class="stat-grid">
+        <div class="stat">
+          <span class="stat-label">State</span>
+          <span class="stat-value" id="statState"><span class="state-badge state-idle">IDLE</span></span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Time</span>
+          <span class="stat-value" id="statTime">0:00</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Coverage</span>
+          <span class="stat-value highlight" id="statCoverage">0.0%</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Visited</span>
+          <span class="stat-value" id="statVisited">0.0%</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Escapes</span>
+          <span class="stat-value" id="statEscapes">0</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Targets</span>
+          <span class="stat-value" id="statTargets">0</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="status-section">
+      <h2>Robot</h2>
+      <div class="stat-grid">
+        <div class="stat">
+          <span class="stat-label">Position</span>
+          <span class="stat-value" id="statPos">(0, 0)</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Heading</span>
+          <span class="stat-value" id="statHeading">0 deg</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Battery</span>
+          <span class="stat-value" id="statBattery">--</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Sensors</span>
+          <span class="stat-value" id="statSensors">
+            <span class="connection-dot dot-disconnected"></span>offline
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <div class="status-section">
+      <h2>Sensors</h2>
+      <div class="stat-grid">
+        <div class="stat">
+          <span class="stat-label">Front</span>
+          <span class="stat-value" id="statFront">--</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Left / Right</span>
+          <span class="stat-value" id="statLR">-- / --</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Pitch</span>
+          <span class="stat-value" id="statPitch">--</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">Roll</span>
+          <span class="stat-value" id="statRoll">--</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Log -->
+  <div class="log-panel">
+    <h2>Log</h2>
+    <div class="log-content" id="logContent"></div>
+  </div>
+</div>
+
+<script>
+  // ---- State ----
+  let running = false;
+  let evtSource = null;
+  let mapTimer = null;
+  let logTimer = null;
+
+  // ---- Elements ----
+  const $mapImg = document.getElementById('mapImg');
+  const $logContent = document.getElementById('logContent');
+  const $btnStart = document.getElementById('btnStart');
+  const $btnPause = document.getElementById('btnPause');
+  const $btnStop = document.getElementById('btnStop');
+  const $selMode = document.getElementById('selMode');
+  const $selWorld = document.getElementById('selWorld');
+  const $inpTimeScale = document.getElementById('inpTimeScale');
+  const $inpDuration = document.getElementById('inpDuration');
+
+  // Show/hide sim controls based on mode
+  $selMode.addEventListener('change', () => {
+    const isSim = $selMode.value === 'sim';
+    $selWorld.closest('.controls').querySelectorAll('label').forEach((el, i) => {
+      // Hide world, time scale, duration for real mode
+      if (i >= 1 && i <= 3) {
+        el.style.display = isSim ? '' : 'none';
+        el.nextElementSibling.style.display = isSim ? '' : 'none';
+      }
+    });
+  });
+
+  // ---- API calls ----
+
+  async function startSession() {
+    const mode = $selMode.value;
+    const body = { mode };
+    if (mode === 'sim') {
+      body.world = $selWorld.value;
+      body.time_scale = parseFloat($inpTimeScale.value) || 10;
+      body.duration = parseFloat($inpDuration.value) || 3600;
+    }
+
+    try {
+      const resp = await fetch('/api/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await resp.json();
+      if (resp.ok) {
+        running = true;
+        updateButtons();
+        startSSE();
+        startMapRefresh();
+        startLogRefresh();
+      } else {
+        alert(data.error || 'Start failed');
+      }
+    } catch (e) {
+      alert('Request failed: ' + e.message);
+    }
+  }
+
+  async function stopSession() {
+    try {
+      await fetch('/api/stop', { method: 'POST' });
+    } catch (e) { /* ignore */ }
+    running = false;
+    updateButtons();
+    stopSSE();
+    stopMapRefresh();
+  }
+
+  async function togglePause() {
+    try {
+      const resp = await fetch('/api/pause', { method: 'POST' });
+      const data = await resp.json();
+      if (data.status === 'paused') {
+        $btnPause.textContent = 'Resume';
+      } else {
+        $btnPause.textContent = 'Pause';
+      }
+    } catch (e) { /* ignore */ }
+  }
+
+  function updateButtons() {
+    $btnStart.disabled = running;
+    $btnPause.disabled = !running;
+    $btnStop.disabled = !running;
+    $selMode.disabled = running;
+    $selWorld.disabled = running;
+    $inpTimeScale.disabled = running;
+    $inpDuration.disabled = running;
+  }
+
+  // ---- SSE ----
+
+  function startSSE() {
+    if (evtSource) evtSource.close();
+    evtSource = new EventSource('/api/events');
+    evtSource.onmessage = (e) => {
+      try {
+        const d = JSON.parse(e.data);
+        updateStatus(d);
+      } catch (err) { /* ignore parse errors */ }
+    };
+    evtSource.onerror = () => {
+      // Reconnect handled automatically by EventSource
+    };
+  }
+
+  function stopSSE() {
+    if (evtSource) {
+      evtSource.close();
+      evtSource = null;
+    }
+  }
+
+  function updateStatus(d) {
+    // State badge
+    const stateEl = document.getElementById('statState');
+    if (d.mapper) {
+      const s = d.mapper.state || 'IDLE';
+      stateEl.innerHTML = `<span class="state-badge state-${s.toLowerCase()}">${s}</span>`;
+    } else if (d.mode === 'paused') {
+      stateEl.innerHTML = '<span class="state-badge state-paused">PAUSED</span>';
+    } else {
+      stateEl.innerHTML = '<span class="state-badge state-idle">IDLE</span>';
+    }
+
+    // Time
+    if (d.uptime > 0) {
+      const m = Math.floor(d.uptime / 60);
+      const s = Math.floor(d.uptime % 60);
+      document.getElementById('statTime').textContent = `${m}:${s.toString().padStart(2, '0')}`;
+    }
+
+    // Map coverage
+    if (d.map) {
+      document.getElementById('statCoverage').textContent = d.map.explored_pct.toFixed(1) + '%';
+      document.getElementById('statVisited').textContent = d.map.visited_pct.toFixed(1) + '%';
+    }
+
+    // Mapper stats
+    if (d.mapper) {
+      document.getElementById('statEscapes').textContent = d.mapper.escapes || 0;
+      document.getElementById('statTargets').textContent = d.mapper.frontier_targets || 0;
+    }
+
+    // Robot
+    if (d.robot) {
+      document.getElementById('statPos').textContent =
+        `(${d.robot.x.toFixed(0)}, ${d.robot.y.toFixed(0)})`;
+      document.getElementById('statHeading').textContent =
+        d.robot.angle_deg.toFixed(1) + ' deg';
+    }
+
+    // Sensors
+    if (d.sensors) {
+      const dot = d.sensors.connected
+        ? '<span class="connection-dot dot-connected"></span>online'
+        : '<span class="connection-dot dot-disconnected"></span>offline';
+      document.getElementById('statSensors').innerHTML = dot;
+      document.getElementById('statBattery').textContent =
+        d.sensors.battery_v > 0 ? d.sensors.battery_v.toFixed(2) + 'V' : '--';
+      document.getElementById('statFront').textContent =
+        d.sensors.front_mm > 0 ? d.sensors.front_mm + 'mm' : '--';
+      const l = d.sensors.left_mm > 0 ? d.sensors.left_mm + 'mm' : '--';
+      const r = d.sensors.right_mm > 0 ? d.sensors.right_mm + 'mm' : '--';
+      document.getElementById('statLR').textContent = `${l} / ${r}`;
+      document.getElementById('statPitch').textContent =
+        d.sensors.connected ? d.sensors.pitch.toFixed(1) + '\u00B0' : '--';
+      document.getElementById('statRoll').textContent =
+        d.sensors.connected ? d.sensors.roll.toFixed(1) + '\u00B0' : '--';
+    }
+
+    // Auto-detect session end
+    if (d.mode === 'idle' && running) {
+      running = false;
+      updateButtons();
+      stopSSE();
+      stopMapRefresh();
+    }
+  }
+
+  // ---- Map refresh ----
+
+  function startMapRefresh() {
+    stopMapRefresh();
+    refreshMap();
+    mapTimer = setInterval(refreshMap, 1000);
+  }
+
+  function stopMapRefresh() {
+    if (mapTimer) {
+      clearInterval(mapTimer);
+      mapTimer = null;
+    }
+  }
+
+  function refreshMap() {
+    $mapImg.src = '/api/map.png?t=' + Date.now();
+  }
+
+  // ---- Log refresh ----
+
+  function startLogRefresh() {
+    stopLogRefresh();
+    refreshLog();
+    logTimer = setInterval(refreshLog, 2000);
+  }
+
+  function stopLogRefresh() {
+    if (logTimer) {
+      clearInterval(logTimer);
+      logTimer = null;
+    }
+  }
+
+  async function refreshLog() {
+    try {
+      const resp = await fetch('/api/log?n=50');
+      const lines = await resp.json();
+      $logContent.innerHTML = lines.map(l => '<div>' + escapeHtml(l) + '</div>').join('');
+      $logContent.scrollTop = $logContent.scrollHeight;
+    } catch (e) { /* ignore */ }
+  }
+
+  function escapeHtml(s) {
+    const d = document.createElement('div');
+    d.textContent = s;
+    return d.innerHTML;
+  }
+
+  // ---- Init ----
+  // Load initial map and log on page load
+  refreshMap();
+  refreshLog();
+  // Start log polling even when idle (captures startup messages)
+  startLogRefresh();
+
+  // Also start SSE to detect if a session is already running
+  startSSE();
+</script>
+
+</body>
+</html>

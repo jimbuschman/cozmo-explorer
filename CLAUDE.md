@@ -70,8 +70,15 @@ Mapping platform: Cozmo + ESP32 sensor pod + trailer. Python on PC controls robo
 - 0 rules, 0 LLM calls during navigation
 - Compare: old rule-based system got 1.6% in 10 hours with 2,884 escapes
 
+### Web Dashboard
+- `web/server.py` - aiohttp WebServer: REST API + SSE for live status + PNG map endpoint
+- `web/map_renderer.py` - numpy LUT + Pillow: occupancy grid → 400x400 PNG (<1ms render)
+- `web/static/index.html` - single-page dashboard (vanilla JS, EventSource for SSE, no build tools)
+- `web_main.py` - web-first entry point: starts server on port 8080, opens browser, user clicks Start
+- Dashboard auto-starts when running `python main.py` if `WEB_ENABLED=True` in config
+
 ## Files to Know
-- `config.py` - all tunable parameters
+- `config.py` - all tunable parameters (includes WEB_PORT, WEB_ENABLED)
 - `cozmo_interface/robot.py` - robot control, escape_turn(), collision detection
 - `brain/frontier_navigator.py` - FrontierNavigator (main navigation loop)
 - `brain/mapper_state_machine.py` - MapperStateMachine (4-state machine)
@@ -83,9 +90,13 @@ Mapping platform: Cozmo + ESP32 sensor pod + trailer. Python on PC controls robo
 - `llm/client.py` - Ollama client
 - `simulator/sim_robot.py` - physics + ray-cast sensors
 - `simulator/run_full_sim.py` - full simulation test harness
+- `web/server.py` - aiohttp web server + SSE + API
+- `web/map_renderer.py` - occupancy grid PNG renderer
+- `web_main.py` - web dashboard entry point
 
 ## Test Commands
-- Full run (real robot): `python main.py`
+- **Web dashboard**: `python web_main.py` (opens browser, select mode + world, click Start)
+- Full run (real robot): `python main.py` (dashboard at http://localhost:8080 if WEB_ENABLED)
 - Sim test (headless): `python -m simulator.run_full_sim --world furnished_room --duration 3600 --time-scale 10`
 - Sim test (rendered): `python -m simulator.run_full_sim --world furnished_room --duration 600 --time-scale 5 --render`
 - Interactive sim: `python -m simulator.run_sim`

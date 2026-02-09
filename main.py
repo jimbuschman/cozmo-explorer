@@ -391,11 +391,33 @@ async def main():
         logger.error("Initialization failed!")
         return 1
 
+    # Start web dashboard if enabled
+    web_server = None
+    if config.WEB_ENABLED:
+        try:
+            from web.server import WebServer
+            web_server = WebServer(port=config.WEB_PORT)
+            web_server.set_components(
+                robot=explorer.robot,
+                mapper=explorer.mapper,
+                spatial_map=explorer.spatial_map,
+            )
+            web_server.mode = "running"
+            web_server.session_mode = "real"
+            await web_server.start()
+            logger.info(f"Dashboard: http://localhost:{config.WEB_PORT}")
+        except Exception as e:
+            logger.warning(f"Web server failed to start: {e}")
+            web_server = None
+
     try:
         await explorer.run()
     except Exception as e:
         logger.error(f"Error: {e}")
         return 1
+    finally:
+        if web_server:
+            await web_server.shutdown()
 
     return 0
 

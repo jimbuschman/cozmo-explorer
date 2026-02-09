@@ -30,3 +30,6 @@ pyserial>=3.5
 
 # Simulator
 pygame>=2.5.0
+
+# Web dashboard
+aiohttp>=3.9.0
